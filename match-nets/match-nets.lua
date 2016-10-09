@@ -1,3 +1,8 @@
+--
+-- Various models used throughout experiments
+--
+
+
 function make_matching_net(opt)
     -- input is support set and labels, test datum
     local input = {}
@@ -14,8 +19,8 @@ function make_matching_net(opt)
     g.name = 'embed_g'
     local embed_g = nn.Sequential()
     embed_g:add(nn.SplitTable(1)(input[2]))     -- split up big tensor into table of tensors
-    embed_g:add(nn.MapTable(g))                 -- embed each g then
-    embed_g:add(nn.MapTable(nn.Normalize(2)))   -- normalize for cosine similarity
+    embed_g:add(nngraph.Node(nn.MapTable(g)))   -- embed each g then
+    embed_g:add(nngraph.Node(nn.MapTable(nn.Normalize(2))))  -- normalize for cosine similarity
     embed_g:add(nn.JoinTable())                 -- join into one giant matrix
     
     -- cosine distance between g's and f
@@ -51,16 +56,14 @@ function make_cnn_module(opt, input_size)
         -- 1 is the number of input channels since b&w
         local conv_layer = cudnn.SpatialConvolution(input_size , opt.n_kernels, 
             opt.conv_width, opt.conv_height)(nn.View()(input))
-        local norm_layer = cudnn.BatchNormalization(
-            opt.num_kernels)(conv_layer)
+        local norm_layer = cudnn.BatchNormalization(opt.n_kernels)(conv_layer)
         local pool_layer = cudnn.SpatialMaxPooling(
             opt.pool_width, opt.pool_height)(nn.ReLU()(norm_layer))
         output = (pool_layer)
     else
         local conv_layer = nn.SpatialConvolution(input_size, opt.n_kernels,
             opt.conv_width, opt.conv_height)(nn.View()(input))
-        local norm_layer = nn.BatchNormalization(
-            opt.num_kernels)(conv_layer)
+        local norm_layer = nn.BatchNormalization(opt.n_kernels)(conv_layer)
         local pool_layer = nn.SpatialMaxPooling(
             opt.pool_width, opt.pool_height)(nn.ReLU()(norm_layer))
         output = (pool_layer)

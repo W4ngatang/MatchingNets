@@ -8,21 +8,20 @@ import pdb
 
 n_ex_per_class = 20
 im_size = 28
-
-''' 
-TODO 
-- downsize images to 28x28
-- augment data with rotations
-'''
+thresh = 128
 
 '''
-From Brendan Lake's demo code
+Due to resizing, images are no longer purely black and white
+Rounding to 0 or 1 based on a threshold seems ok
+Threshold arbitrarily chosen as 128
 '''
 def load_image(f):
-    im = imread(f, flatten=True)
-    im = np.logical_not(np.array(im, dtype=bool))
-    return im.astype(float)
+    return np.logical_not(imread(f)/thresh).astype(float)
 
+
+'''
+TODO
+'''
 def rotate_image():
 
     return
@@ -40,23 +39,28 @@ Data returned is in format
 
 '''
 def load_data(path):
-    alphabets = os.listdir(path)
-    n_classes = 0
-    for alphabet in alphabets:
-        n_classes += len(os.listdir(path + '/' + alphabet))
-    data = np.zeros((n_classes*n_ex_per_class, im_size, im_size))
-    
-    for alphabet in alphabets:
-        alpha_path = path + '/' + alphabet
-        for char in os.listdir(alpha_path):
-            char_path = alpha_path + '/' + char
-            char_idx = int(os.listdir(char_path)[0].split('.')[0].split('_')[0]) - 1 # get char index
-            char_offset = char_idx * n_ex_per_class
-            for im in os.listdir(char_path):
-                # for each character, get the numbering and place in the appropriate spot
-                ex_idx = int(im.split('.')[0].split('_')[1])
-                data[char_offset+ex_idx-1,:,:] = \
-                        load_image(char_path + '/' + im)
+    try:
+        alphabets = os.listdir(path)
+        n_classes = 0
+        for alphabet in alphabets:
+            n_classes += len(os.listdir(path + '/' + alphabet))
+        data = np.zeros((n_classes*n_ex_per_class, im_size, im_size))
+        
+        count = 0
+        for alphabet in alphabets:
+            alpha_path = path + '/' + alphabet
+            for char in os.listdir(alpha_path):
+                char_path = alpha_path + '/' + char
+                char_idx = int(os.listdir(char_path)[0].split('.')[0].split('_')[0]) - 1 # get char index
+                char_offset = count * n_ex_per_class
+                for im in os.listdir(char_path):
+                    # for each character, get the numbering and place in the appropriate spot
+                    ex_idx = int(im.split('.')[0].split('_')[1])
+                    data[char_offset+ex_idx-1,:,:] = \
+                            load_image(char_path + '/' + im)
+                count += 1
+    except Exception as e:
+        pdb.set_trace()
     return data, n_classes
 
 '''
@@ -69,27 +73,28 @@ Data will be arranged as follows
 
 '''
 def create_episodes(args, data):
-    k, kB = args.k, args.kB
-    n_classes = data.shape[0] / n_ex_per_class
-    n_examples = k + kB
-    base_bat_offset = args.N * k
-    inputs = np.zeros((args.n_episodes, n_examples, im_size, im_size))
-    outputs = np.zeros((args.n_episodes, n_examples, 1))
+    try:
+        k, kB = args.k, args.kB
+        n_classes = data.shape[0] / n_ex_per_class
+        n_examples = k + kB
+        base_bat_offset = args.N * k
+        inputs = np.zeros((args.n_episodes, args.N * n_examples, im_size, im_size))
+        outputs = np.zeros((args.n_episodes, args.N * n_examples, 1))
 
-    # pre-sample the N classes for each episode
-    # maybe too expensive to keep in memory?
-    episode_classes = np.random.random_integers(0, n_classes-1, (args.n_episodes, args.N))
-    for i,classes in enumerate(episode_classes):
-        for j,c in enumerate(classes):
-            exs = np.random.choice(n_ex_per_class, n_examples) + (c * n_ex_per_class) # offsets
-            set_offset = j*k
-            bat_offset = base_bat_offset + j*kB
-            inputs[i,set_offset:set_offset+k,:,:] = data[exs[:k],:,:]
-            inputs[i,bat_offset:bat_offset+kB,:,:] = \
-                    data[exs[k:],:,:]
-            outputs[i,set_offset:sef_offset+k,:] = np.ones(k)*c
-            outputs[i,bat_offset:bat_offset+kB,:] = np.ones(kB)*c
-
+        # pre-sample the N classes for each episode
+        # maybe too expensive to keep in memory?
+        episode_classes = np.random.random_integers(0, n_classes-1, (args.n_episodes, args.N))
+        for i,classes in enumerate(episode_classes):
+            for j,c in enumerate(classes):
+                exs = np.random.choice(n_ex_per_class, n_examples) + (c * n_ex_per_class) # offsets
+                set_offset = j*k
+                bat_offset = base_bat_offset + j*kB
+                inputs[i,set_offset:set_offset+k,:,:] = data[exs[:k],:,:]
+                inputs[i,bat_offset:bat_offset+kB,:,:] = data[exs[k:],:,:]
+                outputs[i,set_offset:set_offset+k,:] = np.ones((k,1))*c
+                outputs[i,bat_offset:bat_offset+kB,:] = np.ones((kB,1))*c
+    except Exception as e:
+        pdb.set_trace()
     return inputs, outputs
 
 def main(arguments):
@@ -115,15 +120,15 @@ def main(arguments):
     # augment data
     #augment()
 
-    # create training episodes
+    # create episodes
+    # TODO: validation set; independent of training?
     print 'Creating data...'
     tr_ins, tr_outs = create_episodes(args, tr_data)
     te_ins, te_outs = create_episodes(args, te_data)
     print '\tData created!'
-    pdb.set_trace()
 
     # write to hdf5
-    with hypy.File(args.outfile, 'w') as f:
+    with h5py.File(args.outfile, 'w') as f:
         f['tr_ins'] = tr_ins
         f['tr_outs'] = tr_outs
         f['te_ins'] = te_ins
