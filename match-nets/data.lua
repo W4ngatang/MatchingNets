@@ -17,6 +17,7 @@ function data.__index(self,idx)
     if type(idx) == "string" then
         return data[idx]
     else
+        -- TODO shuffle within episode
         set_xs = self.xs[idx]:narrow(1,1,self.k) 
         bat_xs = self.xs[idx]:narrow(1,self.k+1,self.kB)
         set_ys = self.ys[idx]:narrow(1,1,self.k)
@@ -27,7 +28,7 @@ function data.__index(self,idx)
             set_ys = set_ys:cuda()
             bat_ys = bat_ys:cuda()
         end
-        input = {set_xs, bat_xs, set_ys}
+        input = {set_xs, bat_xs}--, set_ys}
         targ = bat_ys
     end
     return {input, target}

@@ -5,28 +5,26 @@
 
 function make_matching_net(opt)
     -- input is support set and labels, test datum
-    local input = {}
-    table.insert(input, nn.Identity()()) -- hat(x)
-    table.insert(input, nn.Identity()()) -- x_i; TODO can make this input a table?
-    table.insert(input, nn.Identity()()) -- y_i
+    local inputs = {}
+    table.insert(inputs, nn.Identity()()) -- hat(x)
+    table.insert(inputs, nn.Identity()()) -- x_i; TODO can this be a table?
+    --table.insert(inputs, nn.Identity()()) -- y_i; note: not used currently
+                                         -- TODO weight indices by score
     
-    local output = {}
+    local outputs = {}
     local f = make_cnn(opt)
     f.name = 'embed_f'
-    local embed_f = f(input[1])
+    local embed_f = f(inputs[1]) -- TODO normalize f
 
     local g = make_cnn(opt)
     g.name = 'embed_g'
-    local embed_g = nn.Sequential()
-    embed_g:add(nn.SplitTable(1)(input[2]))     -- split up big tensor into table of tensors
-    embed_g:add(nngraph.Node(nn.MapTable(g)))   -- embed each g then
-    embed_g:add(nngraph.Node(nn.MapTable(nn.Normalize(2))))  -- normalize for cosine similarity
-    embed_g:add(nn.JoinTable())                 -- join into one giant matrix
+    local embed_g = nn.JoinTable(1)(
+        nn.MapTable(nn.Normalize(2))(
+        nn.MapTable(g)(nn.SplitTable(1)(inputs[2]))))
     
     -- cosine distance between g's and f
-    table.insert(output, nn.MM(embed_f, embed_g)) -- NOTE: not normalizing f currently
-
-    return nn.gModule({input}, {output})
+    table.insert(outputs, nn.MM()({embed_f, embed_g})) 
+    return nn.gModule(inputs, outputs)
 
 end
 

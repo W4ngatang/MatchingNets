@@ -36,24 +36,26 @@ cmd:option('-pool_weight', 2, 'max pooling filter width')
 cmd:option('-pool_height', 2, 'max pooling filter height')
 
 -- Training options --
+cmd:option('-n_epochs', 1, 'number of training epochs')
 cmd:option('-learning_rate', 1, 'initial learning rate')
 cmd:option('-batch_size', 1, 'number of episodes per batch')
 cmd:option('-max_grad_norm', 5, 'maximum gradient value')
 
 function train(model, data)
     local params, grad_params = model:getParameters()
-    params:uniform(-opt.param_init, opt.param_init)
+    params:uniform(-opt.init_scale, opt.init_scale)
     local timer = torch.Timer()
     local last_loss = 1e9
 
     for epoch = 1, opt.n_epochs do
         print("Epoch", epoch)
-        timer.reset()
+        timer:reset()
         local total_loss = 0
         for i = 1, data.n_batches do -- TODO batching
             grad_params:zero()
 
-            local inputs, targs = data[i]
+            local episode = data[i]
+            local inputs, targs = episode[1], episode[2]
             local outs = model:forward(inputs)
             local loss = crit:forward(outs, targs)
             total_loss = total_loss + loss
@@ -104,9 +106,9 @@ function main()
    local tr_outs = f:read('tr_outs'):all()
    local te_ins = f:read('te_ins'):all()
    local te_outs = f:read('te_outs'):all()
-   opt.k = f:read('k'):all()
-   opt.N = f:read('N'):all()
-   opt.kB = f:read('kB'):all()
+   opt.k = f:read('k'):all()[1]
+   opt.N = f:read('N'):all()[1]
+   opt.kB = f:read('kB'):all()[1]
    tr_data = data(opt, {tr_ins, tr_outs})
    te_data = data(opt, {te_ins, te_outs})
    print('\tData loaded!')
@@ -121,10 +123,10 @@ function main()
 
    -- train
    print('Starting training...')
-   train(model, {tr_ins, tr_outs})
+   train(model, tr_data)
 
    -- evaluate
-   evaluate(model, {te_ins, te_outs})
+   evaluate(model, te_data)
 end
 
 main()
