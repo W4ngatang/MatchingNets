@@ -2,29 +2,63 @@
 -- Various models used throughout experiments
 --
 
+function normalize_layer(l, norm)
+    return nn.Transpose({1,2})(nn.JoinTable(2)(
+        nn.MapTable(nn.Unsqueeze(2)(nn.Normalize(norm)()))(
+        nn.SplitTable(1)(l))))
+end
 
 function make_matching_net(opt)
     -- input is support set and labels, test datum
     local inputs = {}
-    table.insert(inputs, nn.Identity()()) -- hat(x)
-    table.insert(inputs, nn.Identity()()) -- x_i; TODO can this be a table?
-    --table.insert(inputs, nn.Identity()()) -- y_i; note: not used currently
-                                         -- TODO weight indices by score
-    
+    table.insert(inputs, nn.Identity()()) -- hat(x); shape kb x 1 x im x im
+    table.insert(inputs, nn.Identity()()) -- support set: shape k x 1 x im x im
+    table.insert(inputs, nn.Identity()()) -- y_i
     local outputs = {}
+
+    -- in: N*kB x im x im
+    --   -> Unsqueeze -> N*kB x 1 x im x im
+    --   -> f -> N*kB x 64 x 1 x 1
+    --   -> Squeeze -> N*kB x 64
+    --   -> normalize -> N*k x 64
+    -- out: N*kB x 64
     local f = make_cnn(opt)
     f.name = 'embed_f'
-    local embed_f = f(inputs[1]) -- TODO normalize f
+    local embed_f = nn.Squeeze()(f(nn.Unsqueeze(2)(inputs[1])))
+    local norm_f = nn.Normalize(2)(embed_f)
+    --local norm_f = normalize_layer(embed_f,2)
 
+    -- in: N*k x im x im
+    --   -> Unsqueeze -> N*k x 1 x im x im
+    --   -> g -> N*k x 64 x 1 x 1
+    --   -> Squeeze -> N*k x 64
+    --   -> normalize -> N*k x 64
+    -- out: N*k x 64
     local g = make_cnn(opt)
     g.name = 'embed_g'
-    local embed_g = nn.JoinTable(1)(
-        nn.MapTable(nn.Normalize(2))(
-        nn.MapTable(g)(nn.SplitTable(1)(inputs[2]))))
+    local embed_g = nn.Squeeze()(g(nn.Unsqueeze(2)(inputs[2])))
+    local norm_g = nn.Normalize(2)(embed_g)
+    --local norm_g = normalize_layer(embed_g,2)
+
     
-    -- cosine distance between g's and f
-    table.insert(outputs, nn.MM()({embed_f, embed_g})) 
-    return nn.gModule(inputs, outputs)
+    local match_scores = nn.MM2(false, true)({norm_f, norm_g}) -- (N*k) x (N*kb)
+    --local match_scores = nn.MM2(false, true)({embed_f, embed_g}) -- (N*k) x (N*kb)
+    local class_scores = nn.IndexAdd(1, opt.N, opt.kB*opt.N)({match_scores, inputs[3]}) -- N x (N*kb)
+    local crit = nil
+    if opt.match_fn == 'softmax' then
+        -- maybe optional softmax? should this be taken over ALL (x_i, y_i)?
+        local probs = nn.LogSoftMax()(nn.Transpose({1,2})(class_scores))
+        table.insert(outputs, probs)
+        crit = nn.ClassNLLCriterion()
+    elseif opt.match_fn == 'cosine' then
+        table.insert(outputs, class_scores)
+        crit = nn.CosineEmbeddingCriterion()
+    else
+        print("Matching function " .. opt.match_fn .. " not supported!")
+        return
+    end
+
+    return nn.gModule(inputs, outputs), crit
 
 end
 
@@ -44,26 +78,34 @@ function make_cnn(opt)
         end
     end
     local output = layers[opt.n_modules]
-    return nn.gModule({input}, {output}), layers
+    return nn.gModule({input}, {output})
 end
 
-function make_cnn_module(opt, input_size)
+function make_cnn_module(opt, n_input_feats)
+    local conv_w = opt.conv_width
+    local conv_h = opt.conv_height
+    local pad_w = math.floor((conv_w - 1) / 2)
+    local pad_h = math.floor((conv_h - 1) / 2)
+    local pool_w = opt.pool_width
+    local pool_h = opt.pool_height
+
     local output
     local input = nn.Identity()() -- double () denotes nngraph module
     if opt.cudnn == 1 then
         -- 1 is the number of input channels since b&w
-        local conv_layer = cudnn.SpatialConvolution(input_size , opt.n_kernels, 
-            opt.conv_width, opt.conv_height)(nn.View()(input))
-        local norm_layer = cudnn.BatchNormalization(opt.n_kernels)(conv_layer)
+        -- conv height and width change every layer
+        local conv_layer = cudnn.SpatialConvolution(n_input_feats, opt.n_kernels, 
+            conv_w, conv_h, 1, 1, pad_w, pad_h)(input)
+        local norm_layer = cudnn.SpatialBatchNormalization(opt.n_kernels)(conv_layer)
         local pool_layer = cudnn.SpatialMaxPooling(
-            opt.pool_width, opt.pool_height)(nn.ReLU()(norm_layer))
+            pool_w, pool_h, pool_w, pool_h)(nn.ReLU()(norm_layer))
         output = (pool_layer)
     else
-        local conv_layer = nn.SpatialConvolution(input_size, opt.n_kernels,
-            opt.conv_width, opt.conv_height)(nn.View()(input))
-        local norm_layer = nn.BatchNormalization(opt.n_kernels)(conv_layer)
+        local conv_layer = nn.SpatialConvolution(n_input_feats, opt.n_kernels,
+            conv_w, conv_h, 1, 1, pad_w, pad_h)(input)
+        local norm_layer = nn.SpatialBatchNormalization(opt.n_kernels)(conv_layer)
         local pool_layer = nn.SpatialMaxPooling(
-            opt.pool_width, opt.pool_height)(nn.ReLU()(norm_layer))
+            pool_w, pool_h, pool_w, pool_h)(nn.ReLU()(norm_layer))
         output = (pool_layer)
     end
     return nn.gModule({input},{output})
