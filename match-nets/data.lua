@@ -34,17 +34,21 @@ function data.__index(self,idx)
         if idx > self.n_batches then
             return "Error"
         end
-        -- TODO
-        --  - batching, something like :narrow(1,idx,batch_size):narrow(2,1, N*k)
-        --  - shuffle within episode
-        set_xs = self.xs[idx]:narrow(1,1,self.N*self.k)
-        bat_xs = self.xs[idx]:narrow(1,self.N*self.k+1,self.N*self.kB)
-        -- want indices in [self.N]
+        --[[ TODO
+                - batching, something like :narrow(1,idx,batch_size):narrow(2,1, N*k)
+        --]]
+
+        local shuffle = torch.randperm(self.N * self.k):type('torch.LongTensor')
+        local set_xs = self.xs[idx]:narrow(1,1,self.N*self.k):index(1, shuffle)
+        local set_ys = self.set_ys:index(1, shuffle)
+
+        local shuffle = torch.randperm(self.N * self.kB):type('torch.LongTensor')
+        local bat_xs = self.xs[idx]:narrow(1,self.N*self.k+1,self.N*self.kB):index(1, shuffle)
+        local bat_ys = self.bat_ys:index(1, shuffle)
         --set_ys = torch.squeeze(self.ys[idx]:narrow(1,1,self.N*self.k))
         --bat_ys = torch.squeeze(self.ys[idx]:narrow(1,self.N*self.k+1,self.N*self.kB))
-        set_ys = self.set_ys
-        bat_ys = self.bat_ys
-        if self.gpuid >= 0 then
+
+        if self.gpuid > 0 then
             set_xs = set_xs:cuda()
             bat_xs = bat_xs:cuda()
             set_ys = set_ys:cuda()

@@ -20,7 +20,7 @@ cmd:text('Training a matching network')
 cmd:text('Options')
 
 cmd:option('-seed', 42, 'random seed')
-cmd:option('-gpuid', -1, '>=0 if use CUDA')
+cmd:option('-gpuid', 0, '>0 if use CUDA')
 cmd:option('-cudnn', 0, '1 if use cudnn')
 
 -- Input/Output options
@@ -51,6 +51,7 @@ function train(model, crit, tr_data, val_data)
     params:uniform(-opt.init_scale, opt.init_scale)
     local timer = torch.Timer()
     local last_score = evaluate(model, val_data)
+    print("Initial validation accuracy: " .. val_score)
 
     for epoch = 1, opt.n_epochs do
         print("Epoch", epoch)
@@ -78,7 +79,8 @@ function train(model, crit, tr_data, val_data)
         timer:reset()
         val_score = evaluate(model, val_data)
         print("\tValidation time " .. timer:time().real .. ' seconds')
-        print("\tLoss: " .. total_loss .. "; Validation accuracy: " .. val_score)
+        print("\tLoss: " .. total_loss)
+        print("\tValidation accuracy: " .. val_score)
         if val_score < last_score then
             opt.learning_rate = opt.learning_rate/2
         end
@@ -94,7 +96,7 @@ function evaluate(model, data)
         local inputs, targs = episode[1], episode[2]
         local outs = model:forward(inputs)
         local maxes, preds = torch.max(outs, 2)
-        if opt.gpuid >= 0 then
+        if opt.gpuid > 0 then
             preds = preds:cuda()
         end
         n_correct = n_correct + torch.sum(torch.eq(preds, targs))
@@ -108,16 +110,16 @@ function main()
     opt = cmd:parse(arg)
     torch.manualSeed(opt.seed)
 
-    if opt.gpuid >= 0 then
+    if opt.gpuid > 0 then
         print('Using CUDA on GPU ' .. opt.gpuid .. '...')
         require 'cutorch'
         require 'cunn'
         if opt.cudnn == 1 then
-            assert(opt.gpuid >= 0, 'GPU must be used if using cudnn')
+            assert(opt.gpuid > 0, 'GPU must be used if using cudnn')
             print('\tUsing cudnn...')
             require 'cudnn'
         end
-        cutorch.setDevice(opt.gpuid+1)
+        cutorch.setDevice(opt.gpuid)
         cutorch.manualSeed(opt.seed)
    end
 
@@ -138,7 +140,7 @@ function main()
    -- build model
    print('Building model...')
    model, crit = make_matching_net(opt)
-   if opt.gpuid >= 0 then
+   if opt.gpuid > 0 then
        model = model:cuda()
        crit = crit:cuda()
     end
