@@ -19,42 +19,48 @@ cmd:text()
 cmd:text('Training a matching network')
 cmd:text('Options')
 
-cmd:option('-seed', 42, 'random seed')
-cmd:option('-gpuid', 0, '>0 if use CUDA')
-cmd:option('-cudnn', 0, '1 if use cudnn')
+cmd:option('--seed', 42, 'random seed')
+cmd:option('--gpuid', 0, '>0 if use CUDA')
+cmd:option('--cudnn', 0, '1 if use cudnn')
 
 -- Input/Output options
-cmd:option('-datafile', 'test.hdf5', 'path to hdf5 data file')
+cmd:option('--datafile', 'test.hdf5', 'path to hdf5 data file')
+cmd:option('--logfile', 'log.log', 'file to log messages to')
 
 -- Model options --
-cmd:option('-init_scale', .05, 'scale of initial parameters')
-cmd:option('-embed_fn', '', 'Function to embed inputs')
-cmd:option('-match_fn', 'softmax', 'Function to score matches')
-cmd:option('-FCE', 0, '1 if use FCE, 0 otherwise')
+cmd:option('--init_scale', .05, 'scale of initial parameters')
+cmd:option('--embed_fn', '', 'Function to embed inputs')
+cmd:option('--match_fn', 'softmax', 'Function to score matches')
+cmd:option('--FCE', 0, '1 if use FCE, 0 otherwise')
 
 -- CNN options --
-cmd:option('-n_modules', 4, 'number of convolutional units to stack')
-cmd:option('-n_kernels', 64, 'number of convolutional filters')
-cmd:option('-conv_width', 3, 'convolution filter width')
-cmd:option('-conv_height', 3, 'convolution filter height')
-cmd:option('-pool_width', 2, 'max pooling filter width')
-cmd:option('-pool_height', 2, 'max pooling filter height')
+cmd:option('--n_modules', 4, 'number of convolutional units to stack')
+cmd:option('--n_kernels', 64, 'number of convolutional filters')
+cmd:option('--conv_width', 3, 'convolution filter width')
+cmd:option('--conv_height', 3, 'convolution filter height')
+cmd:option('--pool_width', 2, 'max pooling filter width')
+cmd:option('--pool_height', 2, 'max pooling filter height')
 
 -- Training options --
-cmd:option('-n_epochs', 1, 'number of training epochs')
-cmd:option('-learning_rate', 1, 'initial learning rate')
-cmd:option('-batch_size', 1, 'number of episodes per batch')
-cmd:option('-max_grad_norm', 5, 'maximum gradient value')
+cmd:option('--n_epochs', 1, 'number of training epochs')
+cmd:option('--learning_rate', 1, 'initial learning rate')
+cmd:option('--batch_size', 1, 'number of episodes per batch')
+cmd:option('--max_grad_norm', 5, 'maximum gradient value')
+
+function log(file, msg)
+    print(msg)
+    file:write(msg .. "\n")
+end
 
 function train(model, crit, tr_data, val_data)
     local params, grad_params = model:getParameters()
     params:uniform(-opt.init_scale, opt.init_scale)
     local timer = torch.Timer()
     local last_score = evaluate(model, val_data)
-    print("Initial validation accuracy: " .. val_score)
+    log(file, "Initial validation accuracy: " .. last_score)
 
     for epoch = 1, opt.n_epochs do
-        print("Epoch", epoch)
+        log(file, "Epoch " ..epoch .. ", learning rate " .. opt.learning_rate )
         timer:reset()
         local total_loss = 0
         for i = 1, tr_data.n_batches do -- TODO batching
@@ -72,18 +78,19 @@ function train(model, crit, tr_data, val_data)
             end
             params:add(grad_params:mul(-opt.learning_rate))
             if i % (tr_data.n_batches/2) == 0 then
-                print("\t\tCompleted " .. i/tr_data.n_batches .. " in " ..timer:time().real .. ' seconds')
+                log(file, "\t  Completed " .. i/tr_data.n_batches*100 .. "% in " ..timer:time().real .. " seconds")
             end
         end
-        print("\tTraining time: " .. timer:time().real .. ' seconds')
+        log(file, "\tTraining time: " .. timer:time().real .. " seconds")
         timer:reset()
         val_score = evaluate(model, val_data)
-        print("\tValidation time " .. timer:time().real .. ' seconds')
-        print("\tLoss: " .. total_loss)
-        print("\tValidation accuracy: " .. val_score)
+        log(file, "\tValidation time " .. timer:time().real .. " seconds")
+        log(file, "\tLoss: " .. total_loss)
+        log(file, "\tValidation accuracy: " .. val_score)
         if val_score < last_score then
             opt.learning_rate = opt.learning_rate/2
         end
+        last_score = val_score
     end
 end
 
@@ -109,14 +116,14 @@ end
 function main()
     opt = cmd:parse(arg)
     torch.manualSeed(opt.seed)
-
+    file = io.open(opt.logfile, 'w')
     if opt.gpuid > 0 then
-        print('Using CUDA on GPU ' .. opt.gpuid .. '...')
+        log(file, "Using CUDA on GPU " .. opt.gpuid .. "...")
         require 'cutorch'
         require 'cunn'
         if opt.cudnn == 1 then
             assert(opt.gpuid > 0, 'GPU must be used if using cudnn')
-            print('\tUsing cudnn...')
+            log(file, "\tUsing cudnn...")
             require 'cudnn'
         end
         cutorch.setDevice(opt.gpuid)
@@ -124,35 +131,42 @@ function main()
    end
 
    -- load data
-   print('Loading data...')
+   log(file, 'Loading data...')
    local f = hdf5.open(opt.datafile, 'r')
    local tr_ins = f:read('tr_ins'):all()
    local tr_outs = f:read('tr_outs'):all()
-   local te_ins = f:read('te_ins'):all()
-   local te_outs = f:read('te_outs'):all()
+   local val_ins = f:read('val_ins'):all()
+   local val_outs = f:read('val_outs'):all()
    opt.k = f:read('k'):all()[1]
    opt.N = f:read('N'):all()[1]
    opt.kB = f:read('kB'):all()[1]
    tr_data = data(opt, {tr_ins, tr_outs})
-   te_data = data(opt, {te_ins, te_outs})
-   print('\tData loaded!')
+   val_data = data(opt, {val_ins, val_outs})
+   log(file, '\tData loaded!')
    
    -- build model
-   print('Building model...')
+   log(file, 'Building model...')
    model, crit = make_matching_net(opt)
    if opt.gpuid > 0 then
        model = model:cuda()
        crit = crit:cuda()
     end
-   print('\tModel built!')
+   log(file, '\tModel built!')
 
    -- train
-   print('Starting training...')
-   train(model, crit, tr_data, te_data)
+   log(file, 'Starting training...')
+   train(model, crit, tr_data, val_data)
+   tr_data = nil
+   val_data = nil
+   collectgarbage()
 
    -- evaluate
+   local te_ins = f:read('te_ins'):all()
+   local te_outs = f:read('te_outs'):all()
+   te_data = data(opt, {te_ins, te_outs})
    test_acc = evaluate(model, te_data)
-   print("Test accuracy: " .. test_acc)
+   log(file, "Test accuracy: " .. test_acc)
+   io.close(file)
 end
 
 main()

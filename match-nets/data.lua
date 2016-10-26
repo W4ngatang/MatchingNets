@@ -35,7 +35,7 @@ function data.__index(self,idx)
             return "Error"
         end
         --[[ TODO
-                - batching, something like :narrow(1,idx,batch_size):narrow(2,1, N*k)
+                - batching, something like :narrow(1,idx,batch_size):narrow(2,1, N*k
         --]]
 
         local shuffle = torch.randperm(self.N * self.k):type('torch.LongTensor')
