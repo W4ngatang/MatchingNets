@@ -24,7 +24,8 @@ cmd:option('--gpuid', 0, '>0 if use CUDA')
 cmd:option('--cudnn', 0, '1 if use cudnn')
 
 -- Input/Output options
-cmd:option('--datafile', 'test.hdf5', 'path to hdf5 data file')
+cmd:option('--datafile', '', 'path to folder containing data files')
+cmd:option('--data_folder', '', 'path to folder containing data files')
 cmd:option('--logfile', 'log.log', 'file to log messages to')
 
 -- Model options --
@@ -42,7 +43,7 @@ cmd:option('--pool_width', 2, 'max pooling filter width')
 cmd:option('--pool_height', 2, 'max pooling filter height')
 
 -- Training options --
-cmd:option('--n_epochs', 1, 'number of training epochs')
+cmd:option('--n_epochs', 15, 'number of training epochs')
 cmd:option('--learning_rate', 1, 'initial learning rate')
 cmd:option('--batch_size', 1, 'number of episodes per batch')
 cmd:option('--max_grad_norm', 5, 'maximum gradient value')
@@ -52,38 +53,45 @@ function log(file, msg)
     file:write(msg .. "\n")
 end
 
-function train(model, crit, tr_data, val_data)
+function train(model, crit)
     local params, grad_params = model:getParameters()
     params:uniform(-opt.init_scale, opt.init_scale)
     local timer = torch.Timer()
-    local last_score = evaluate(model, val_data)
+    local last_score = evaluate(model, "val")
     log(file, "Initial validation accuracy: " .. last_score)
-
     for epoch = 1, opt.n_epochs do
         log(file, "Epoch " ..epoch .. ", learning rate " .. opt.learning_rate )
         timer:reset()
         local total_loss = 0
-        for i = 1, tr_data.n_batches do -- TODO batching
-            grad_params:zero()
-            local episode = tr_data[i]
-            local inputs, targs = episode[1], episode[2]
-            local outs = model:forward(inputs)
-            local loss = crit:forward(outs, targs)
-            total_loss = total_loss + loss
-            local grad_loss = crit:backward(outs, targs)
-            model:backward(inputs, grad_loss)
-            local grad_norm = grad_params:norm()
-            if grad_norm > opt.max_grad_norm then
-                grad_params:mul(opt.max_grad_norm / grad_norm)
+        for shard_n = 1, opt.n_tr_shards do
+            local f = hdf5.open(opt.data_folder .. 'tr_' .. shard_n .. '.hdf5', 'r')
+            local tr_ins = f:read('ins'):all()
+            local tr_outs = f:read('outs'):all()
+            tr_data = data(opt, {tr_ins, tr_outs})
+            for i = 1, tr_data.n_batches do -- TODO batching
+                grad_params:zero()
+                local episode = tr_data[i]
+                local inputs, targs = episode[1], episode[2]
+                local outs = model:forward(inputs)
+                local loss = crit:forward(outs, targs)
+                total_loss = total_loss + loss
+                local grad_loss = crit:backward(outs, targs)
+                model:backward(inputs, grad_loss)
+                local grad_norm = grad_params:norm()
+                if grad_norm > opt.max_grad_norm then
+                    grad_params:mul(opt.max_grad_norm / grad_norm)
+                end
+                params:add(grad_params:mul(-opt.learning_rate))
             end
-            params:add(grad_params:mul(-opt.learning_rate))
-            if i % (tr_data.n_batches/2) == 0 then
-                log(file, "\t  Completed " .. i/tr_data.n_batches*100 .. "% in " ..timer:time().real .. " seconds")
-            end
+            log(file, "\t  Completed " .. shard_n/opt.n_tr_shards*100 .. "% in " ..timer:time().real .. " seconds")
+            tr_ins = nil
+            tr_outs = nil
+            tr_data = nil
+            collectgarbage()
         end
         log(file, "\tTraining time: " .. timer:time().real .. " seconds")
         timer:reset()
-        val_score = evaluate(model, val_data)
+        val_score = evaluate(model, "val")
         log(file, "\tValidation time " .. timer:time().real .. " seconds")
         log(file, "\tLoss: " .. total_loss)
         log(file, "\tValidation accuracy: " .. val_score)
@@ -94,23 +102,39 @@ function train(model, crit, tr_data, val_data)
     end
 end
 
-function evaluate(model, data)
+function evaluate(model, split)
     local last_loss = 1e9
     local n_preds = 0
     local n_correct = 0
-    for i = 1, data.n_batches do -- TODO batching
-        local episode = data[i]
-        local inputs, targs = episode[1], episode[2]
-        local outs = model:forward(inputs)
-        local maxes, preds = torch.max(outs, 2)
-        if opt.gpuid > 0 then
-            preds = preds:cuda()
-        end
-        n_correct = n_correct + torch.sum(torch.eq(preds, targs))
-        n_preds = n_preds + targs:nElement()
+    local n_shards = opt.n_te_shards
+    local str_split = 'te_'
+    if split == "val" then
+        n_shards = opt.n_val_shards
+        str_split = 'val_'
     end
-    local accuracy = n_correct/n_preds
-    return accuracy
+    for shard_n = 1, n_shards do 
+        local f = hdf5.open(opt.data_folder .. str_split .. shard_n .. '.hdf5', 'r')
+        local ins = f:read('ins'):all()
+        local outs = f:read('outs'):all()
+        local sp_data = data(opt, {ins, outs})
+
+        for i = 1, sp_data.n_batches do -- TODO batching
+            local episode = sp_data[i]
+            local inputs, targs = episode[1], episode[2]
+            local outs = model:forward(inputs)
+            local maxes, preds = torch.max(outs, 2)
+            if opt.gpuid > 0 then
+                preds = preds:cuda()
+            end
+            n_correct = n_correct + torch.sum(torch.eq(preds, targs))
+            n_preds = n_preds + targs:nElement()
+        end
+        ins = nil
+        outs = nil
+        sp_data = nil
+        collectgarbage()
+    end
+    return n_correct/n_preds
 end
 
 function main()
@@ -129,42 +153,35 @@ function main()
         cutorch.setDevice(opt.gpuid)
         cutorch.manualSeed(opt.seed)
    end
+   -- TODO append / to data_folder
 
-   -- load data
-   log(file, 'Loading data...')
-   local f = hdf5.open(opt.datafile, 'r')
-   local tr_ins = f:read('tr_ins'):all()
-   local tr_outs = f:read('tr_outs'):all()
-   local val_ins = f:read('val_ins'):all()
-   local val_outs = f:read('val_outs'):all()
+   log(file, 'Loading parameters...')
+   local f = hdf5.open(opt.data_folder .. 'params.hdf5', 'r')
+   opt.n_tr_shards = f:read('n_tr_shards'):all()[1]
+   opt.n_val_shards = f:read('n_val_shards'):all()[1]
+   opt.n_te_shards = f:read('n_te_shards'):all()[1]
    opt.k = f:read('k'):all()[1]
    opt.N = f:read('N'):all()[1]
    opt.kB = f:read('kB'):all()[1]
-   tr_data = data(opt, {tr_ins, tr_outs})
-   val_data = data(opt, {val_ins, val_outs})
-   log(file, '\tData loaded!')
-   
+   log(file, '\tTraining with N shards...') -- TODO
+
    -- build model
    log(file, 'Building model...')
    model, crit = make_matching_net(opt)
    if opt.gpuid > 0 then
        model = model:cuda()
        crit = crit:cuda()
-    end
+   end
    log(file, '\tModel built!')
+   collectgarbage()
 
    -- train
    log(file, 'Starting training...')
-   train(model, crit, tr_data, val_data)
-   tr_data = nil
-   val_data = nil
+   train(model, crit)--, tr_data, val_data)
    collectgarbage()
 
    -- evaluate
-   local te_ins = f:read('te_ins'):all()
-   local te_outs = f:read('te_outs'):all()
-   te_data = data(opt, {te_ins, te_outs})
-   test_acc = evaluate(model, te_data)
+   test_acc = evaluate(model, "te")
    log(file, "Test accuracy: " .. test_acc)
    io.close(file)
 end
