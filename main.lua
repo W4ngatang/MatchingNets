@@ -20,8 +20,8 @@ cmd:text('Training a matching network')
 cmd:text('Options')
 
 cmd:option('--seed', 42, 'random seed')
-cmd:option('--gpuid', 0, '>0 if use CUDA')
-cmd:option('--cudnn', 0, '1 if use cudnn')
+cmd:option('--gpuid', 1, '>0 if use CUDA')
+cmd:option('--cudnn', 1, '1 if use cudnn')
 
 -- Input/Output options
 cmd:option('--datafile', '', 'path to folder containing data files')
@@ -31,6 +31,7 @@ cmd:option('--logfile', 'log.log', 'file to log messages to')
 -- Model options --
 cmd:option('--init_scale', .05, 'scale of initial parameters')
 cmd:option('--embed_fn', '', 'Function to embed inputs')
+cmd:option('--share_embed', 0, '1 if share parameters between embedding functions')
 cmd:option('--match_fn', 'softmax', 'Function to score matches')
 cmd:option('--FCE', 0, '1 if use FCE, 0 otherwise')
 
@@ -152,38 +153,41 @@ function main()
         end
         cutorch.setDevice(opt.gpuid)
         cutorch.manualSeed(opt.seed)
-   end
-   -- TODO append / to data_folder
+    end
+    -- TODO append / to data_folder
 
-   log(file, 'Loading parameters...')
-   local f = hdf5.open(opt.data_folder .. 'params.hdf5', 'r')
-   opt.n_tr_shards = f:read('n_tr_shards'):all()[1]
-   opt.n_val_shards = f:read('n_val_shards'):all()[1]
-   opt.n_te_shards = f:read('n_te_shards'):all()[1]
-   opt.k = f:read('k'):all()[1]
-   opt.N = f:read('N'):all()[1]
-   opt.kB = f:read('kB'):all()[1]
-   log(file, '\tTraining with N shards...') -- TODO
+    log(file, 'Loading parameters...')
+    local f = hdf5.open(opt.data_folder .. 'params.hdf5', 'r')
+    opt.n_tr_shards = f:read('n_tr_shards'):all()[1]
+    opt.n_val_shards = f:read('n_val_shards'):all()[1]
+    opt.n_te_shards = f:read('n_te_shards'):all()[1]
+    opt.k = f:read('k'):all()[1]
+    opt.N = f:read('N'):all()[1]
+    opt.kB = f:read('kB'):all()[1]
+    log(file, '\tTraining with N shards...') -- TODO
 
    -- build model
-   log(file, 'Building model...')
-   model, crit = make_matching_net(opt)
-   if opt.gpuid > 0 then
-       model = model:cuda()
-       crit = crit:cuda()
-   end
-   log(file, '\tModel built!')
-   collectgarbage()
+    log(file, 'Building model...')
+    if opt.share_embed == 1 then
+        print('\tTying embedding function parameters...')
+    end
+    model, crit = make_matching_net(opt)
+    if opt.gpuid > 0 then
+        model = model:cuda()
+        crit = crit:cuda()
+    end
+    log(file, '\tModel built!')
+    collectgarbage()
 
-   -- train
-   log(file, 'Starting training...')
-   train(model, crit)--, tr_data, val_data)
-   collectgarbage()
+    -- train
+    log(file, 'Starting training...')
+    train(model, crit)--, tr_data, val_data)
+    collectgarbage()
 
    -- evaluate
-   test_acc = evaluate(model, "te")
-   log(file, "Test accuracy: " .. test_acc)
-   io.close(file)
+    test_acc = evaluate(model, "te")
+    log(file, "Test accuracy: " .. test_acc)
+    io.close(file)
 end
 
 main()

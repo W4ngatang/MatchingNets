@@ -20,7 +20,7 @@ function IndexAdd:updateOutput(input)
     local t = input[1]
     local inds = input[2]
     self.output:resize(self.N, self.n_bat):zero()
-    self.output:indexAdd(self.dimension, inds, t) -- :zero() first?
+    self.output:indexAdd(self.dimension, inds, t)
     return self.output
 end
 

@@ -2,12 +2,6 @@
 -- Various models used throughout experiments
 --
 
-function normalize_layer(l, norm)
-    return nn.Transpose({1,2})(nn.JoinTable(2)(
-        nn.MapTable(nn.Unsqueeze(2)(nn.Normalize(norm)()))(
-        nn.SplitTable(1)(l))))
-end
-
 function make_matching_net(opt)
     -- input is support set and labels, test datum
     local inputs = {}
@@ -26,7 +20,6 @@ function make_matching_net(opt)
     f.name = 'embed_f'
     local embed_f = nn.Squeeze()(f(nn.Unsqueeze(2)(inputs[1])))
     local norm_f = nn.Normalize(2)(embed_f)
-    --local norm_f = normalize_layer(embed_f,2)
 
     -- in: N*k x im x im
     --   -> Unsqueeze -> N*k x 1 x im x im
@@ -34,16 +27,20 @@ function make_matching_net(opt)
     --   -> Squeeze -> N*k x 64
     --   -> normalize -> N*k x 64
     -- out: N*k x 64
-    local g = make_cnn(opt)
-    g.name = 'embed_g'
+    local g = nil
+    if opt.share_embed == 1 then
+        print('\tTying embedding function parameters...')
+        g = f
+    else
+        g = make_cnn(opt)
+        g.name = 'embed_g'
+    end
     local embed_g = nn.Squeeze()(g(nn.Unsqueeze(2)(inputs[2])))
     local norm_g = nn.Normalize(2)(embed_g)
-    --local norm_g = normalize_layer(embed_g,2)
-
     
-    local match_scores = nn.MM2(false, true)({norm_f, norm_g}) -- (N*k) x (N*kb)
-    --local match_scores = nn.MM2(false, true)({embed_f, embed_g}) -- (N*k) x (N*kb)
+    local match_scores = nn.MM2(false, true)({norm_f, norm_g}) --(N*k) x (N*kb)
     local class_scores = nn.IndexAdd(1, opt.N, opt.kB*opt.N)({match_scores, inputs[3]}) -- N x (N*kb)
+
     local crit = nil
     if opt.match_fn == 'softmax' then
         -- maybe optional softmax? should this be taken over ALL (x_i, y_i)?
@@ -66,7 +63,6 @@ function make_cnn(opt)
     local input = nn.Identity()()
     local layers = {}
     for i=1,opt.n_modules do
-        -- probably want to name the layer
         if i == 1 then
             local conv_module = make_cnn_module(opt, 1)
             conv_module.name = 'cnn' .. i
