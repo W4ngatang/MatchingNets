@@ -1,5 +1,6 @@
 require 'torch'
 require 'nn'
+require 'optim'
 
 package.path = package.path .. ";" .. os.getenv("HOME") .. 
     "/MatchingNets/match-nets/?.lua" .. ";" .. os.getenv("HOME")
@@ -45,7 +46,11 @@ cmd:option('--pool_height', 2, 'max pooling filter height')
 
 -- Training options --
 cmd:option('--n_epochs', 15, 'number of training epochs')
+cmd:option('--optimizer', 'sgd', 'optimizer to use (from optim)')
 cmd:option('--learning_rate', .001, 'initial learning rate')
+cmd:option('--learning_rate_decay', .01, 'learning rate decay') -- maybe want .99
+cmd:option('--momentum', .5, 'momentum')
+cmd:option('--halve_learning_rate', 1, '1 if halve learning rate if val score decreases between successive epochs')
 cmd:option('--batch_size', 1, 'number of episodes per batch')
 cmd:option('--max_grad_norm', 5, 'maximum gradient value')
 
@@ -57,8 +62,26 @@ end
 function train(model, crit)
     local params, grad_params = model:getParameters()
     params:uniform(-opt.init_scale, opt.init_scale)
+    local optimize, optim_state
+    if opt.optimizer == 'sgd' then
+        optim_state = { -- NB: Siamese paper used layerwise LR and momentum
+            learningRate = opt.learning_rate,
+            weightDecay = 0,
+            momentum = opt.momentum,
+            learningRateDecay = opt.learning_rate_decay
+        }
+        optimize = optim.sgd
+    elseif opt.optimizer == 'adagrad' then
+        optim_state = {
+            learningRate = opt.learning_rate
+        }
+        optimize = optim.adagrad
+    else
+        error('Unknown optimizer!')
+    end
     local timer = torch.Timer()
     local last_score = evaluate(model, "val")
+    local best_score = last_score
     log(file, "Initial validation accuracy: " .. last_score)
     for epoch = 1, opt.n_epochs do
         log(file, "Epoch " ..epoch .. ", learning rate " .. opt.learning_rate )
@@ -70,19 +93,24 @@ function train(model, crit)
             local tr_outs = f:read('outs'):all()
             tr_data = data(opt, {tr_ins, tr_outs})
             for i = 1, tr_data.n_batches do -- TODO batching
-                grad_params:zero()
                 local episode = tr_data[i]
                 local inputs, targs = episode[1], episode[2]
-                local outs = model:forward(inputs)
-                local loss = crit:forward(outs, targs)
-                total_loss = total_loss + loss
-                local grad_loss = crit:backward(outs, targs)
-                model:backward(inputs, grad_loss)
-                local grad_norm = grad_params:norm()
-                if grad_norm > opt.max_grad_norm then
-                    grad_params:mul(opt.max_grad_norm / grad_norm)
+
+                function feval(params)
+                    grad_params:zero()
+                    local outs = model:forward(inputs)
+                    local loss = crit:forward(outs, targs)
+                    total_loss = total_loss + loss
+                    local grad_loss = crit:backward(outs, targs)
+                    model:backward(inputs, grad_loss)
+                    local grad_norm = grad_params:norm()
+                    if grad_norm > opt.max_grad_norm then
+                        grad_params:mul(opt.max_grad_norm / grad_norm)
+                    end
+                    return loss, grad_params
                 end
-                params:add(grad_params:mul(-opt.learning_rate))
+
+                optimize(feval, params, optim_state)
             end
             log(file, "\t  Completed " .. shard_n/opt.n_tr_shards*100 .. "% in " ..timer:time().real .. " seconds")
             tr_ins = nil
@@ -96,8 +124,12 @@ function train(model, crit)
         log(file, "\tValidation time " .. timer:time().real .. " seconds")
         log(file, "\tLoss: " .. total_loss)
         log(file, "\tValidation accuracy: " .. val_score)
-        if val_score < last_score then
+        if opt.halve_learning_rate and val_score < last_score then
             opt.learning_rate = opt.learning_rate/2
+        end
+        if val_score > best_score then
+            -- TODO: save the model
+            best_score = val_score
         end
         last_score = val_score
     end
