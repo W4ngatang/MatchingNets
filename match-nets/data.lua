@@ -16,14 +16,13 @@ function data:__init(opt, datasets)
     self.batch_size = opt.batch_size
     self.n_episodes = self.xs:size(1)
     self.n_batches = self.n_episodes / self.batch_size
+    self.perm = torch.randperm(self.n_batches):type('torch.LongTensor')
 
     local inds = torch.range(1, self.N):reshape(self.N, 1):long()
     local set_ys = inds:repeatTensor(1,self.k):view(-1):long()
     local bat_ys = inds:repeatTensor(1,self.kB):view(-1):long()
-    --local set_zs = torch.zeros(self.k*self.N, self.N)
-    --local bat_zs = torch.zeros(self.kB*self.N, self.N)
-    self.set_ys = set_ys --set_zs:scatter(2, set_ys, 1)
-    self.bat_ys = bat_ys --bat_zs:scatter(3, bat_ys, 1)
+    self.set_ys = set_ys 
+    self.bat_ys = bat_ys
 end
 
 function data.__index(self,idx)
@@ -35,18 +34,17 @@ function data.__index(self,idx)
             return "Error"
         end
         --[[ TODO
-                - batching, something like :narrow(1,idx,batch_size):narrow(2,1, N*k
+        - batching, something like :narrow(1,idx,batch_size):narrow(2,1, N*k
         --]]
 
+        p_idx = self.perm[idx]
         local shuffle = torch.randperm(self.N * self.k):type('torch.LongTensor')
-        local set_xs = self.xs[idx]:narrow(1,1,self.N*self.k):index(1, shuffle)
+        local set_xs = self.xs[p_idx]:narrow(1,1,self.N*self.k):index(1, shuffle)
         local set_ys = self.set_ys:index(1, shuffle)
 
-        local shuffle = torch.randperm(self.N * self.kB):type('torch.LongTensor')
-        local bat_xs = self.xs[idx]:narrow(1,self.N*self.k+1,self.N*self.kB):index(1, shuffle)
+        shuffle = torch.randperm(self.N * self.kB):type('torch.LongTensor')
+        local bat_xs = self.xs[p_idx]:narrow(1,self.N*self.k+1,self.N*self.kB):index(1, shuffle)
         local bat_ys = self.bat_ys:index(1, shuffle)
-        --set_ys = torch.squeeze(self.ys[idx]:narrow(1,1,self.N*self.k))
-        --bat_ys = torch.squeeze(self.ys[idx]:narrow(1,self.N*self.k+1,self.N*self.kB))
 
         if self.gpuid > 0 then
             set_xs = set_xs:cuda()
@@ -58,4 +56,9 @@ function data.__index(self,idx)
         targ = bat_ys
     end
     return {input, targ}
+end
+
+-- actually don't need to call this because on shuffling perm is set to random
+function data.shuffle()
+    self.perm = torch.randperm(self.n_batches):type('torch.LongTensor')
 end

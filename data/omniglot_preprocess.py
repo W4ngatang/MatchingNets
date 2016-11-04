@@ -16,15 +16,9 @@ Rounding to 0 or 1 based on a threshold seems ok
 Threshold arbitrarily chosen as 128
 '''
 def load_image(f):
-    return np.logical_not(imread(f)/thresh).astype(float)
-
-
-'''
-TODO
-'''
-def rotate_image():
-
-    return
+    original = np.logical_not(imread(f)/thresh).astype(float)
+    #return [np.rot90(original, i) for i in xrange(4)]
+    return original
 
 '''
 Data returned is in format
@@ -40,6 +34,8 @@ Data returned is in format
 '''
 def load_data(path, split=1):
     try:
+        # compute the number of character classes (should be 1623)
+        # to preallocate an array to fill
         alphabets = os.listdir(path)
         n_classes = 0
         for alphabet in alphabets:
@@ -52,13 +48,12 @@ def load_data(path, split=1):
             alpha_path = path + '/' + alphabet
             for char in os.listdir(alpha_path):
                 char_path = alpha_path + '/' + char
-                char_idx = int(os.listdir(char_path)[0].split('.')[0].split('_')[0]) - 1 # get char index
-                char_offset = count * n_ex_per_class
+                char_idx = int(os.listdir(char_path)[0].split('.')[0].split('_')[0]) - 1
+                char_offset = count * n_ex_per_class # offset for the class in the array
                 for im in os.listdir(char_path):
                     # for each character, get the numbering and place in the appropriate spot
-                    ex_idx = int(im.split('.')[0].split('_')[1])
-                    data[char_offset+ex_idx-1,:,:] = \
-                            load_image(char_path + '/' + im)
+                    ex_idx = char_offset + int(im.split('.')[0].split('_')[1]) - 1
+                    data[ex_idx,:,:] = load_image(char_path+'/'+im)
                 count += 1
             if not (count % int(n_classes/10)):
                 print '\tFinished %d classes' % count
@@ -80,23 +75,28 @@ def create_episodes(data, n_episodes):
     try:
         k, kB = args.k, args.kB
         n_classes = data.shape[0] / n_ex_per_class
-        n_examples = k + kB
+        n_examples = k + kB # n examples per class per episode
         base_bat_offset = args.N * k
         inputs = np.zeros((n_episodes, args.N * n_examples, im_size, im_size))
         outputs = np.zeros((n_episodes, args.N * n_examples, 1))
 
-        # pre-sample the N classes for each episode
-        # maybe too expensive to keep in memory?
-        episode_classes = np.random.random_integers(0, n_classes-1, (n_episodes, args.N))
-        for i,classes in enumerate(episode_classes):
+        # presample the N classes for each episode, including rotations classes (hence x4)
+        # then for each class in the episode sample k+kB examples
+        for i in xrange(n_episodes):
+            episode_classes = np.random.choice(4*n_classes, args.N, replace=False)
             for j,c in enumerate(classes):
-                exs = np.random.choice(n_ex_per_class, n_examples) + (c * n_ex_per_class) # offsets
+                n_rots = c / n_classes
+                base_class_offset = c - (n_classes*n_rots)
+                exs = np.random.choice(n_ex_per_class, n_examples, replace=False) + \
+                        (base_class_offset * n_ex_per_class)
                 set_offset = j*k
                 bat_offset = base_bat_offset + j*kB
-                inputs[i,set_offset:set_offset+k,:,:] = data[exs[:k],:,:]
-                inputs[i,bat_offset:bat_offset+kB,:,:] = data[exs[k:],:,:]
-                outputs[i,set_offset:set_offset+k,:] = np.ones((k,1))*c
-                outputs[i,bat_offset:bat_offset+kB,:] = np.ones((kB,1))*c
+                for m in xrange(k): # TODO I'm sure there's a cleaner numpy way to do this
+                    inputs[i,set_offset:set_offset+m,:,:] = np.rot90(data[exs[m],:,:], n_rots)
+                    outputs[i,set_offset:set_offset+m,:] = c #np.ones((k,1))*c
+                for m in xrange(kB):
+                    inputs[i,bat_offset:bat_offset+m,:,:] = np.rot90(data[exs[k+m],:,:], n_rots)
+                    outputs[i,bat_offset:bat_offset+m,:] = c #np.ones((kB,1))*c
     except Exception as e:
         pdb.set_trace()
     return inputs, outputs
@@ -109,7 +109,7 @@ def create_shards(data, n_episodes, n_shards, split):
             f['outs'] = outs
         del ins, outs
         print '\t%d..' % (i+1),
-    print '\n'
+    print '\n',
 
 
 def main(arguments):
@@ -131,7 +131,7 @@ def main(arguments):
     parser.add_argument('--n_tr_episodes', help='number of tr episodes per shard', type=int, default=10000) # about 70s / 10k
     parser.add_argument('--n_val_episodes', help='number of val episodes per shard', type=int, default=10000)
     parser.add_argument('--n_te_episodes', help='number of te episodes per shard', type=int, default=10000)
-    parser.add_argument('--splits', help='string containing fractions for validation and test sets respectively, e.g. .1,.1', type=str, default='.1,.1')
+    parser.add_argument('--splits', help='string containing fractions for train, validation, test sets respectively, e.g. .8,.1,.1', type=str, default='.75,.1,.1')
     parser.add_argument('--im_dim', help='dim of image along a side', type=int, default=28)
     args = parser.parse_args(arguments)
     
@@ -162,12 +162,13 @@ def main(arguments):
                 f['n_classes'] = np.array([n_classes], dtype=np.int32)
         print '\tSaved loaded data to %s' % args.save_data_to
 
-    break_pts = [n_ex_per_class * int(n_classes * float(x)) for x in args.splits.split(',')]
-    val_data = data[:break_pts[0]]
-    te_data = data[break_pts[0]:break_pts[0]+break_pts[1]]
-    tr_data = data[break_pts[0]+break_pts[1]:]
+    break_pts = [(n_ex_per_class) * int(n_classes * float(x)) for x in args.splits.split(',')]
+    tr_data = data[:break_pts[0]]
+    val_data = data[break_pts[0]:break_pts[0]+break_pts[1]]
+    te_data = data[break_pts[0]+break_pts[1]:]
     print '\tData loaded!'
-    print '\tSplit sizes: %d, %d, %d' % (tr_data.shape[0], val_data.shape[0], te_data.shape[0])
+    pdb.set_trace()
+    print '\tSplit sizes: %d, %d, %d' % (tr_data.shape[0]/(n_ex_per_class), val_data.shape[0]/(n_ex_per_class), te_data.shape[0]/(n_ex_per_class))
 
     # augment data
     #augment()

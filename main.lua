@@ -26,13 +26,13 @@ cmd:option('--cudnn', 1, '1 if use cudnn')
 -- Input/Output options
 cmd:option('--datafile', '', 'path to folder containing data files')
 cmd:option('--data_folder', '', 'path to folder containing data files')
-cmd:option('--logfile', 'log.log', 'file to log messages to')
+cmd:option('--logfile', '', 'file to log messages to')
 
 -- Model options --
 cmd:option('--init_scale', .05, 'scale of initial parameters')
-cmd:option('--embed_fn', '', 'Function to embed inputs')
 cmd:option('--share_embed', 0, '1 if share parameters between embedding functions')
 cmd:option('--match_fn', 'softmax', 'Function to score matches')
+cmd:option('--embed_fn', '', 'Function to embed inputs')
 cmd:option('--FCE', 0, '1 if use FCE, 0 otherwise')
 
 -- CNN options --
@@ -45,7 +45,7 @@ cmd:option('--pool_height', 2, 'max pooling filter height')
 
 -- Training options --
 cmd:option('--n_epochs', 15, 'number of training epochs')
-cmd:option('--learning_rate', 1, 'initial learning rate')
+cmd:option('--learning_rate', .001, 'initial learning rate')
 cmd:option('--batch_size', 1, 'number of episodes per batch')
 cmd:option('--max_grad_norm', 5, 'maximum gradient value')
 
@@ -164,7 +164,7 @@ function main()
     opt.k = f:read('k'):all()[1]
     opt.N = f:read('N'):all()[1]
     opt.kB = f:read('kB'):all()[1]
-    log(file, '\tTraining with N shards...') -- TODO
+    log(file, '\tTraining with ' .. opt.n_tr_shards .. ' shards...') -- TODO
 
    -- build model
     log(file, 'Building model...')
