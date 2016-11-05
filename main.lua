@@ -111,7 +111,7 @@ function train(model, crit)
             local tr_ins = f:read('ins'):all()
             local tr_outs = f:read('outs'):all()
             local tr_data = data(opt, {tr_ins, tr_outs})
-            for i = 1, tr_data.n_batches do -- TODO batching
+            for i = 1, tr_data.n_batches do
                 local episode = tr_data[i]
                 inputs, targs = episode[1], episode[2]
                 optimize(feval, params, optim_state)

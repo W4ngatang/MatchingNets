@@ -36,6 +36,7 @@ function data.__index(self,idx)
         local B = self.batch_size
         local set_size = self.N * self.k
         local bat_size = self.N * self.kB
+        local shuffle
 
         p_idx = self.perm[idx] -- shuffle batch order
         local meta_xs = self.xs:narrow(1,(p_idx-1)*B+1,B)
@@ -45,7 +46,7 @@ function data.__index(self,idx)
         local bat_ys = torch.zeros(B*bat_size):long()
 
         for i=1,B do -- shuffle within batches
-            local shuffle = torch.randperm(set_size):long()
+            shuffle = torch.randperm(set_size):long()
             set_xs:narrow(1,(i-1)*set_size+1,set_size):index(meta_xs[i]:narrow(1,1,set_size),1, shuffle)
             set_ys[i]:index(self.set_ys,1,shuffle)
 
