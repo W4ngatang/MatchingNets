@@ -1,4 +1,4 @@
---[[ Module to perform indexAdd operation
+--[[ Module to perform indexAdd operation ALONG ROWS
 ]]
 
 package.path = package.path .. ";" .. os.getenv("HOME") .. 
@@ -8,19 +8,25 @@ local dbg = require 'debugger'
 
 local IndexAdd, parent = torch.class('nn.IndexAdd', 'nn.Module')
 
-function IndexAdd:__init(dimension, N, n_bat)
+-- N: length of output along dimension dim
+function IndexAdd:__init(dim, N)--, n_bat)
     parent.__init(self)
-    self.dimension = dimension
+    self.dim = dim
     self.gradInput = {self.gradInput, self.gradInput.new()}
     self.N = N
-    self.n_bat = n_bat
+    --self.n_bat = n_bat
 end
 
+-- in: 
+--      t: B x p x q
+--      inds: B x p
+-- out: B x N x q
 function IndexAdd:updateOutput(input)
     local t = input[1]
     local inds = input[2]
-    self.output:resize(self.N, self.n_bat):zero()
-    self.output:indexAdd(self.dimension, inds, t)
+    --self.output:resize(self.N, self.n_bat):zero()
+    self.output:resize(self.N, t:size(2)):zero()
+    self.output:indexAdd(self.dim, inds, t)
     return self.output
 end
 

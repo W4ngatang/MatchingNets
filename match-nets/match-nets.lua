@@ -5,29 +5,32 @@
 function make_matching_net(opt)
     -- input is support set and labels, test datum
     local inputs = {}
-    table.insert(inputs, nn.Identity()()) -- hat(x); shape kb x 1 x im x im
-    table.insert(inputs, nn.Identity()()) -- support set: shape k x 1 x im x im
-    table.insert(inputs, nn.Identity()()) -- y_i
+    table.insert(inputs, nn.Identity()()) -- hat(x): B*N*kb x im x im
+    table.insert(inputs, nn.Identity()()) -- x_i set: B*N*k x im x im
+    table.insert(inputs, nn.Identity()()) -- y_i: B*N*k x 1
     local outputs = {}
 
-    -- in: N*kB x im x im
-    --   -> Unsqueeze -> N*kB x 1 x im x im
-    --   -> f -> N*kB x 64 x 1 x 1
-    --   -> Squeeze -> N*kB x 64
-    --   -> normalize -> N*k x 64
-    -- out: N*kB x 64
+    -- in: B*N*kB x im x im
+    --   -> unsqueeze -> B*N*kB x 1 x im x im
+    --   -> f -> B*N*kB x 64 x 1 x 1
+    --   -> squeeze -> B*N*kB x 64
+    --   -> normalize -> B*N*kB x 64
+    --   -> reshape -> B x N*kB x 64
+    -- out: B x N*kB x 64
     local f = make_cnn(opt)
     f.name = 'embed_f'
     local embed_f = nn.Squeeze()(f(nn.Unsqueeze(2)(inputs[1])))
     local norm_f = nn.Normalize(2)(embed_f)
+    local batch_f = nn.View(-1, opt.N*opt.kB, opt.n_kernels)(norm_f)
 
-    -- in: N*k x im x im
-    --   -> Unsqueeze -> N*k x 1 x im x im
-    --   -> g -> N*k x 64 x 1 x 1
-    --   -> Squeeze -> N*k x 64
-    --   -> normalize -> N*k x 64
-    -- out: N*k x 64
-    local g = nil
+    -- in: B*N*k x im x im
+    --   -> unsqueeze -> B*N*k x 1 x im x im
+    --   -> g -> B*N*k x 64 x 1 x 1
+    --   -> squeeze -> B*N*k x 64
+    --   -> normalize -> B*N*k x 64
+    --   -> view -> B x N*k x 64
+    -- out: B x N*k x 64
+    local g
     if opt.share_embed == 1 then
         print('\tTying embedding function parameters...')
         g = f
@@ -37,9 +40,13 @@ function make_matching_net(opt)
     end
     local embed_g = nn.Squeeze()(g(nn.Unsqueeze(2)(inputs[2])))
     local norm_g = nn.Normalize(2)(embed_g)
+    local batch_g = nn.View(-1, opt.N*opt.k, opt.n_kernels)(norm_g)
     
-    local match_scores = nn.MM2(false, true)({norm_f, norm_g}) --(N*k) x (N*kb)
-    local class_scores = nn.IndexAdd(1, opt.N, opt.kB*opt.N)({match_scores, inputs[3]}) -- N x (N*kb)
+    -- in: (B x N*kB x 64) , (B x N*k x 64)
+    -- MM: -> B x N*k x N*kB
+    -- IndexAdd -> B x N x N*kb
+    local match_scores = nn.MM2(false, true)({norm_g, norm_f}) -- maybe swap?
+    local class_scores = nn.IndexAdd(1, opt.N)({match_scores, inputs[3]})
 
     local crit = nil
     if opt.match_fn == 'softmax' then
