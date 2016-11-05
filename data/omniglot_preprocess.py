@@ -11,16 +11,17 @@ im_size = 28
 thresh = 128
 
 '''
+
 Due to resizing, images are no longer purely black and white
 Rounding to 0 or 1 based on a threshold seems ok
 Threshold arbitrarily chosen as 128
-'''
-def load_image(f):
-    original = np.logical_not(imread(f)/thresh).astype(float)
-    #return [np.rot90(original, i) for i in xrange(4)]
-    return original
 
 '''
+def load_image(f):
+    return np.logical_not(imread(f)/thresh).astype(float)
+
+'''
+
 Data returned is in format
 
    [ class 1, ex 1]
@@ -57,12 +58,23 @@ def load_data(path, split=1):
                 count += 1
             if not (count % int(n_classes/10)):
                 print '\tFinished %d classes' % count
-            
     except Exception as e:
         pdb.set_trace()
     return data, n_classes
 
+def augment(data):
+    try:
+        n_data = data.shape[0]*4
+        augmented = np.zeros((n_data, im_size, im_size))
+        for i, datum in enumerate(data):
+            for j in xrange(4):
+                augmented[j*n_data+i, :, :] = np.rot90(datum, j)
+    except Exception as e:
+        pdb.set_trace()
+    return augmented
+
 '''
+
 Data will be arranged as follows
 
 [ episode 1 ] -->   [ S ] total ((k + kb), im_size, im_size)
@@ -71,7 +83,7 @@ Data will be arranged as follows
 [ episode N ]
 
 '''
-def create_episodes(data, n_episodes):
+def create_episodes(data, n_episodes, rot=True):
     try:
         k, kB = args.k, args.kB
         n_classes = data.shape[0] / n_ex_per_class
@@ -82,9 +94,9 @@ def create_episodes(data, n_episodes):
 
         # presample the N classes for each episode, including rotations classes (hence x4)
         # then for each class in the episode sample k+kB examples
-        for i in xrange(n_episodes):
+        for i in xrange(n_episodes): # TODO test set shouldn't have rotations
             episode_classes = np.random.choice(4*n_classes, args.N, replace=False)
-            for j,c in enumerate(classes):
+            for j,c in enumerate(episode_classes):
                 n_rots = c / n_classes
                 base_class_offset = c - (n_classes*n_rots)
                 exs = np.random.choice(n_ex_per_class, n_examples, replace=False) + \
@@ -92,11 +104,11 @@ def create_episodes(data, n_episodes):
                 set_offset = j*k
                 bat_offset = base_bat_offset + j*kB
                 for m in xrange(k): # TODO I'm sure there's a cleaner numpy way to do this
-                    inputs[i,set_offset:set_offset+m,:,:] = np.rot90(data[exs[m],:,:], n_rots)
-                    outputs[i,set_offset:set_offset+m,:] = c #np.ones((k,1))*c
+                    inputs[i,set_offset+m,:,:] = np.rot90(data[exs[m],:,:], n_rots)
+                    outputs[i,set_offset+m,:] = c #np.ones((k,1))*c
                 for m in xrange(kB):
-                    inputs[i,bat_offset:bat_offset+m,:,:] = np.rot90(data[exs[k+m],:,:], n_rots)
-                    outputs[i,bat_offset:bat_offset+m,:] = c #np.ones((kB,1))*c
+                    inputs[i,bat_offset+m,:,:] = np.rot90(data[exs[k+m],:,:], n_rots)
+                    outputs[i,bat_offset+m,:] = c #np.ones((kB,1))*c
     except Exception as e:
         pdb.set_trace()
     return inputs, outputs
@@ -131,7 +143,7 @@ def main(arguments):
     parser.add_argument('--n_tr_episodes', help='number of tr episodes per shard', type=int, default=10000) # about 70s / 10k
     parser.add_argument('--n_val_episodes', help='number of val episodes per shard', type=int, default=10000)
     parser.add_argument('--n_te_episodes', help='number of te episodes per shard', type=int, default=10000)
-    parser.add_argument('--splits', help='string containing fractions for train, validation, test sets respectively, e.g. .8,.1,.1', type=str, default='.75,.1,.1')
+    parser.add_argument('--splits', help='string containing fractions for train, validation, test sets respectively, e.g. .8,.1,.1', type=str, default='.76,.12,.12')
     parser.add_argument('--im_dim', help='dim of image along a side', type=int, default=28)
     args = parser.parse_args(arguments)
     
@@ -167,11 +179,7 @@ def main(arguments):
     val_data = data[break_pts[0]:break_pts[0]+break_pts[1]]
     te_data = data[break_pts[0]+break_pts[1]:]
     print '\tData loaded!'
-    pdb.set_trace()
     print '\tSplit sizes: %d, %d, %d' % (tr_data.shape[0]/(n_ex_per_class), val_data.shape[0]/(n_ex_per_class), te_data.shape[0]/(n_ex_per_class))
-
-    # augment data
-    #augment()
 
     # create episodes
     if args.out_path and args.out_path[-1] != '/':

@@ -47,7 +47,7 @@ function make_matching_net(opt)
         local probs = nn.LogSoftMax()(nn.Transpose({1,2})(class_scores))
         table.insert(outputs, probs)
         crit = nn.ClassNLLCriterion()
-    elseif opt.match_fn == 'cosine' then
+    elseif opt.match_fn == 'cosine' then -- TODO
         table.insert(outputs, class_scores)
         crit = nn.CosineEmbeddingCriterion()
     else
