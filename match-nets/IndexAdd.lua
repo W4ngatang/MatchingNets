@@ -9,12 +9,11 @@ local dbg = require 'debugger'
 local IndexAdd, parent = torch.class('nn.IndexAdd', 'nn.Module')
 
 -- N: length of output along dimension dim
-function IndexAdd:__init(dim, N)--, n_bat)
+function IndexAdd:__init(dim, N)
     parent.__init(self)
     self.dim = dim
     self.gradInput = {self.gradInput, self.gradInput.new()}
     self.N = N
-    --self.n_bat = n_bat
 end
 
 -- in: 
@@ -22,23 +21,42 @@ end
 --      inds: B x p
 -- out: B x N x q
 function IndexAdd:updateOutput(input)
-    local t = input[1]
-    local inds = input[2]
-    --self.output:resize(self.N, self.n_bat):zero()
-    self.output:resize(self.N, t:size(2)):zero()
-    self.output:indexAdd(self.dim, inds, t)
+    assert(#input == 2, 'input must be a tensor and indices')
+    local t, inds = table.unpack(input)
+    assert(t:nDimension() == 2 or a:nDimension() == 3, 'input tensors must be 2D or 3D')
+
+    if t:nDimension() == 2 then
+        assert(inds:nDimension() == 1, 'indices must be 1D')
+        assert(inds:size(1) == t:size(1), 'tensor sizes do not match')
+        self.output:resize(self.N, t:size(2)):zero()
+        self.output:indexAdd(self.dim, inds, t)
+    else
+        assert(inds:nDimension() == 2, 'indices must be 2D')
+        assert(inds:size(1) == t:size(1), 'inputs must contain same number of minibatches')
+        assert(inds:size(2) == t:size(2), 'tensor sizes do not match')
+        self.output:resize(t:size(1), self.N, t:size(2)):zero()
+        for i = 1, t:size(1) do
+            self.output:narrow(1,i,1):indexAdd(self.dim, inds[i], t:narrow(1,i,1))
+        end
+    end
     return self.output
 end
 
 function IndexAdd:updateGradInput(input, gradOutput)
-    local t = input[1]
-    local inds = input[2]
+    assert(#input == 2, 'input must be a tensor and indices')
+    local t, inds = table.unpack(input)
 
-    self.gradInput[2]:resize(inds:size()):zero()
-    local gradInput = self.gradInput[1]
-    gradInput:resizeAs(t):zero()
-    for i = 1, inds:nElement() do -- do reverse indexAdd
-        gradInput:narrow(1,i,1):add(gradOutput:narrow(1,inds[i],1))
+    assert(gradOutput:nDimension() == 2 or gradOutput:nDimension() == 3, 'arguments must be a 2D or 3D tensor')
+
+    if gradOutput:nDimension() == 2 then
+        self.gradInput[2]:resizeAs(inds):zero()
+        local gradInput = self.gradInput[1]
+        gradInput:resizeAs(t):zero()
+        for i = 1, inds:nElement() do -- do reverse indexAdd
+            gradInput:narrow(1,i,1):add(gradOutput:narrow(1,inds[i],1))
+        end
+    else
+
     end
     return self.gradInput
 end
