@@ -8,7 +8,6 @@ function make_matching_net(opt)
     table.insert(inputs, nn.Identity()()) -- hat(x); shape kb x 1 x im x im
     table.insert(inputs, nn.Identity()()) -- support set: shape k x 1 x im x im
     table.insert(inputs, nn.Identity()()) -- y_i
-    local outputs = {}
 
     -- in: N*kB x im x im
     --   -> Unsqueeze -> N*kB x 1 x im x im
@@ -27,7 +26,7 @@ function make_matching_net(opt)
     --   -> Squeeze -> N*k x 64
     --   -> normalize -> N*k x 64
     -- out: N*k x 64
-    local g = nil
+    local g
     if opt.share_embed == 1 then
         print('\tTying embedding function parameters...')
         g = f
@@ -37,11 +36,16 @@ function make_matching_net(opt)
     end
     local embed_g = nn.Squeeze()(g(nn.Unsqueeze(2)(inputs[2])))
     local norm_g = nn.Normalize(2)(embed_g)
-    
-    local match_scores = nn.MM2(false, true)({norm_f, norm_g}) --(N*k) x (N*kb)
+
+     -- in: (N*k x 64), (N*kB x 64)
+    --   -> MM -> N*k x N*kB
+    --   -> IndexAdd -> N x (N*kB)
+    -- out: N x (N*kB)
+    local match_scores = nn.MM(false, true)({norm_g, norm_f})
     local class_scores = nn.IndexAdd(1, opt.N, opt.kB*opt.N)({match_scores, inputs[3]}) -- N x (N*kb)
 
-    local crit = nil
+    local crit
+    local outputs = {}
     if opt.match_fn == 'softmax' then
         -- maybe optional softmax? should this be taken over ALL (x_i, y_i)?
         local probs = nn.LogSoftMax()(nn.Transpose({1,2})(class_scores))
