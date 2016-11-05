@@ -6,9 +6,8 @@ function make_matching_net(opt)
     -- input is support set and labels, test datum
     local inputs = {}
     table.insert(inputs, nn.Identity()()) -- hat(x): B*N*kb x im x im
-    table.insert(inputs, nn.Identity()()) -- x_i set: B*N*k x im x im
-    table.insert(inputs, nn.Identity()()) -- y_i: B*N*k x 1
-    local outputs = {}
+    table.insert(inputs, nn.Identity()()) -- x_i: B*N*k x im x im
+    table.insert(inputs, nn.Identity()()) -- y_i: B x N*k
 
     -- in: B*N*kB x im x im
     --   -> unsqueeze -> B*N*kB x 1 x im x im
@@ -43,15 +42,18 @@ function make_matching_net(opt)
     local batch_g = nn.View(-1, opt.N*opt.k, opt.n_kernels)(norm_g)
     
     -- in: (B x N*kB x 64) , (B x N*k x 64)
-    -- MM: -> B x N*k x N*kB
-    -- IndexAdd -> B x N x N*kb
-    local match_scores = nn.MM2(false, true)({norm_g, norm_f}) -- maybe swap?
+    --   -> MM: -> B x N*k x N*kB
+    --   -> IndexAdd -> B x N x N*kb
+    --   -> Transpose -> B x N*kB x N
+    --   -> View -> B*N*kB x N
+    local match_scores = nn.MM2(false, true)({batch_g, batch_f})
     local class_scores = nn.IndexAdd(1, opt.N)({match_scores, inputs[3]})
+    local unbatch = nn.View(-1, opt.N)(nn.Transpose({2,3})(class_scores))
 
-    local crit = nil
+    local crit
+    local outputs = {}
     if opt.match_fn == 'softmax' then
-        -- maybe optional softmax? should this be taken over ALL (x_i, y_i)?
-        local probs = nn.LogSoftMax()(nn.Transpose({1,2})(class_scores))
+        local probs = nn.LogSoftMax()(unbatch)
         table.insert(outputs, probs)
         crit = nn.ClassNLLCriterion()
     elseif opt.match_fn == 'cosine' then -- TODO

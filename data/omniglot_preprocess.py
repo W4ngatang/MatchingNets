@@ -75,7 +75,7 @@ def augment(data):
 
 '''
 
-Data will be arranged as follows
+Data will be arranged as follows: n_episodes x (N * (k+kb)) x im_size x im_size
 
 [ episode 1 ] -->   [ S ] total ((k + kb), im_size, im_size)
 [ episode 2 ]       [ B ]   or ((k + kb), 1) for labels

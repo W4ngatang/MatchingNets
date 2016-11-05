@@ -66,11 +66,6 @@ function train(model, crit)
     --[[ Optimization ]]--
     local inputs, targs, total_loss
     function feval(p)
-        --[[
-        if params ~= p then
-            params:copy(p) -- TODO is this necessary?
-        end
-        --]]
         grad_params:zero()
         local outs = model:forward(inputs)
         local loss = crit:forward(outs, targs)
@@ -100,12 +95,13 @@ function train(model, crit)
     else
         error('Unknown optimizer!')
     end
+    log(file, "\tOptimizing with " .. opt.optimizer)
 
     --[[ Training Loop ]]--
     local timer = torch.Timer()
     local last_score = evaluate(model, "val")
     local best_score = last_score
-    log(file, "Initial validation accuracy: " .. last_score)
+    log(file, "\tInitial validation accuracy: " .. last_score)
     for epoch = 1, opt.n_epochs do
         log(file, "Epoch " ..epoch .. ", learning rate " .. optim_state['learningRate'])
         timer:reset()
@@ -160,7 +156,7 @@ function evaluate(model, split)
         local outs = f:read('outs'):all()
         local sp_data = data(opt, {ins, outs})
 
-        for i = 1, sp_data.n_batches do -- TODO batching
+        for i = 1, sp_data.n_batches do
             local episode = sp_data[i]
             local inputs, targs = episode[1], episode[2]
             local outs = model:forward(inputs)
