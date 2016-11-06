@@ -201,7 +201,7 @@ function main()
     opt.k = f:read('k'):all()[1]
     opt.N = f:read('N'):all()[1]
     opt.kB = f:read('kB'):all()[1]
-    log(file, '\tTraining with ' .. opt.n_tr_shards .. ' shards...') -- TODO
+    log(file, '\tTraining with ' .. opt.n_tr_shards .. ' shards...')
 
    -- build model
     log(file, 'Building model...')
