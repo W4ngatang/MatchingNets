@@ -5,27 +5,30 @@
 function make_matching_net(opt)
     -- input is support set and labels, test datum
     local inputs = {}
-    table.insert(inputs, nn.Identity()()) -- hat(x); shape kb x 1 x im x im
-    table.insert(inputs, nn.Identity()()) -- support set: shape k x 1 x im x im
-    table.insert(inputs, nn.Identity()()) -- y_i
+    table.insert(inputs, nn.Identity()()) -- hat(x): B*N*kb x im x im
+    table.insert(inputs, nn.Identity()()) -- x_i: B*N*k x im x im
+    table.insert(inputs, nn.Identity()()) -- y_i: B x N*k
 
-    -- in: N*kB x im x im
-    --   -> Unsqueeze -> N*kB x 1 x im x im
-    --   -> f -> N*kB x 64 x 1 x 1
-    --   -> Squeeze -> N*kB x 64
-    --   -> normalize -> N*k x 64
-    -- out: N*kB x 64
+    -- in: B*N*kB x im x im
+    --   -> unsqueeze -> B*N*kB x 1 x im x im
+    --   -> f -> B*N*kB x 64 x 1 x 1
+    --   -> squeeze -> B*N*kB x 64
+    --   -> normalize -> B*N*kB x 64
+    --   -> reshape -> B x N*kB x 64
+    -- out: B x N*kB x 64
     local f = make_cnn(opt)
     f.name = 'embed_f'
     local embed_f = nn.Squeeze()(f(nn.Unsqueeze(2)(inputs[1])))
     local norm_f = nn.Normalize(2)(embed_f)
+    local batch_f = nn.View(-1, opt.N*opt.kB, opt.n_kernels)(norm_f)
 
-    -- in: N*k x im x im
-    --   -> Unsqueeze -> N*k x 1 x im x im
-    --   -> g -> N*k x 64 x 1 x 1
-    --   -> Squeeze -> N*k x 64
-    --   -> normalize -> N*k x 64
-    -- out: N*k x 64
+    -- in: B*N*k x im x im
+    --   -> unsqueeze -> B*N*k x 1 x im x im
+    --   -> g -> B*N*k x 64 x 1 x 1
+    --   -> squeeze -> B*N*k x 64
+    --   -> normalize -> B*N*k x 64
+    --   -> view -> B x N*k x 64
+    -- out: B x N*k x 64
     local g
     if opt.share_embed == 1 then
         print('\tTying embedding function parameters...')
@@ -36,19 +39,21 @@ function make_matching_net(opt)
     end
     local embed_g = nn.Squeeze()(g(nn.Unsqueeze(2)(inputs[2])))
     local norm_g = nn.Normalize(2)(embed_g)
-
-     -- in: (N*k x 64), (N*kB x 64)
-    --   -> MM -> N*k x N*kB
-    --   -> IndexAdd -> N x (N*kB)
-    -- out: N x (N*kB)
-    local match_scores = nn.MM(false, true)({norm_g, norm_f})
-    local class_scores = nn.IndexAdd(1, opt.N, opt.kB*opt.N)({match_scores, inputs[3]}) -- N x (N*kb)
+    local batch_g = nn.View(-1, opt.N*opt.k, opt.n_kernels)(norm_g)
+    
+    -- in: (B x N*kB x 64) , (B x N*k x 64)
+    --   -> MM: -> B x N*k x N*kB
+    --   -> IndexAdd -> B x N x N*kb
+    --   -> Transpose -> B x N*kB x N
+    --   -> View -> B*N*kB x N
+    local match_scores = nn.MM(false, true)({batch_g, batch_f})
+    local class_scores = nn.IndexAdd(1, opt.N)({match_scores, inputs[3]})
+    local unbatch = nn.View(-1, opt.N)(nn.Transpose({2,3})(class_scores))
 
     local crit
     local outputs = {}
     if opt.match_fn == 'softmax' then
-        -- maybe optional softmax? should this be taken over ALL (x_i, y_i)?
-        local probs = nn.LogSoftMax()(nn.Transpose({1,2})(class_scores))
+        local probs = nn.LogSoftMax()(unbatch)
         table.insert(outputs, probs)
         crit = nn.ClassNLLCriterion()
     elseif opt.match_fn == 'cosine' then -- TODO

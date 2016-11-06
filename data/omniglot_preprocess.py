@@ -64,8 +64,8 @@ def load_data(path, split=1):
 
 def augment(data):
     try:
-        n_data = data.shape[0]*4
-        augmented = np.zeros((n_data, im_size, im_size))
+        n_data = data.shape[0]
+        augmented = np.zeros((n_data*4, im_size, im_size))
         for i, datum in enumerate(data):
             for j in xrange(4):
                 augmented[j*n_data+i, :, :] = np.rot90(datum, j)
@@ -75,7 +75,7 @@ def augment(data):
 
 '''
 
-Data will be arranged as follows
+Data will be arranged as follows: n_episodes x (N * (k+kb)) x im_size x im_size
 
 [ episode 1 ] -->   [ S ] total ((k + kb), im_size, im_size)
 [ episode 2 ]       [ B ]   or ((k + kb), 1) for labels
@@ -92,23 +92,19 @@ def create_episodes(data, n_episodes, rot=True):
         inputs = np.zeros((n_episodes, args.N * n_examples, im_size, im_size))
         outputs = np.zeros((n_episodes, args.N * n_examples, 1))
 
-        # presample the N classes for each episode, including rotations classes (hence x4)
-        # then for each class in the episode sample k+kB examples
-        for i in xrange(n_episodes): # TODO test set shouldn't have rotations
-            episode_classes = np.random.choice(4*n_classes, args.N, replace=False)
+        # for each episode, sample N classes
+        # then for each class sample k+kB examples
+        for i in xrange(n_episodes):
+            episode_classes = np.random.choice(n_classes, args.N, replace=False)
             for j,c in enumerate(episode_classes):
-                n_rots = c / n_classes
-                base_class_offset = c - (n_classes*n_rots)
                 exs = np.random.choice(n_ex_per_class, n_examples, replace=False) + \
-                        (base_class_offset * n_ex_per_class)
+                        (c * n_ex_per_class)
                 set_offset = j*k
                 bat_offset = base_bat_offset + j*kB
-                for m in xrange(k): # TODO I'm sure there's a cleaner numpy way to do this
-                    inputs[i,set_offset+m,:,:] = np.rot90(data[exs[m],:,:], n_rots)
-                    outputs[i,set_offset+m,:] = c #np.ones((k,1))*c
-                for m in xrange(kB):
-                    inputs[i,bat_offset+m,:,:] = np.rot90(data[exs[k+m],:,:], n_rots)
-                    outputs[i,bat_offset+m,:] = c #np.ones((kB,1))*c
+                inputs[i,set_offset:set_offset+k,:,:] = data[exs[:k],:,:]
+                inputs[i,bat_offset:bat_offset+kB,:,:] = data[exs[k:],:,:]
+                outputs[i,set_offset:set_offset+k,:] = np.ones((k,1)) * c
+                outputs[i,bat_offset:bat_offset+kB,:] = np.ones((kB,1))*c
     except Exception as e:
         pdb.set_trace()
     return inputs, outputs
@@ -117,12 +113,12 @@ def create_shards(data, n_episodes, n_shards, split):
     for i in xrange(n_shards):
         with h5py.File(args.out_path + split + "_%d.hdf5" % (i+1), 'w') as f:
             ins, outs = create_episodes(data, n_episodes)
+            pdb.set_trace()
             f['ins'] = ins
             f['outs'] = outs
         del ins, outs
         print '\t%d..' % (i+1),
     print '\n',
-
 
 def main(arguments):
     global args
@@ -181,11 +177,13 @@ def main(arguments):
     print '\tData loaded!'
     print '\tSplit sizes: %d, %d, %d' % (tr_data.shape[0]/(n_ex_per_class), val_data.shape[0]/(n_ex_per_class), te_data.shape[0]/(n_ex_per_class))
 
+    aug_tr_data = augment(tr_data)
+
     # create episodes
     if args.out_path and args.out_path[-1] != '/':
         args.out_path += '/'
     print 'Creating data...'
-    create_shards(tr_data, args.n_tr_episodes, args.n_tr_shards, "tr")
+    create_shards(aug_tr_data, args.n_tr_episodes, args.n_tr_shards, "tr")
     print '\tFinished training data'
     create_shards(val_data, args.n_val_episodes, args.n_val_shards, "val")
     print '\tFinished validation data'
