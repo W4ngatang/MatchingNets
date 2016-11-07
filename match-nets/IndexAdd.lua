@@ -34,7 +34,7 @@ function IndexAdd:updateOutput(input)
         assert(inds:nDimension() == 2, 'indices must be 2D')
         assert(inds:size(1) == t:size(1), 'inputs must contain same number of minibatches')
         assert(inds:size(2) == t:size(2), 'tensor sizes do not match')
-        self.output:resize(t:size(1), self.N, t:size(2)):zero()
+        self.output:resize(t:size(1), self.N, t:size(3)):zero()
         for i = 1, t:size(1) do
             self.output[i]:indexAdd(self.dim, inds[i], t[i])
         end

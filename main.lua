@@ -152,15 +152,15 @@ function evaluate(model, split)
     end
     for shard_n = 1, n_shards do 
         local f = hdf5.open(opt.data_folder .. str_split .. shard_n .. '.hdf5', 'r')
-        local ins = f:read('ins'):all()
-        local outs = f:read('outs'):all()
-        local sp_data = data(opt, {ins, outs})
+        local sp_ins = f:read('ins'):all()
+        local sp_outs = f:read('outs'):all()
+        local sp_data = data(opt, {sp_ins, sp_outs})
 
         for i = 1, sp_data.n_batches do
             local episode = sp_data[i]
             local inputs, targs = episode[1], episode[2]
-            local outs = model:forward(inputs)
-            local maxes, preds = torch.max(outs, 2)
+            local outputs = model:forward(inputs)
+            local maxes, preds = torch.max(outputs, 2)
             if opt.gpuid > 0 then
                 preds = preds:cuda()
             end

@@ -113,7 +113,6 @@ def create_shards(data, n_episodes, n_shards, split):
     for i in xrange(n_shards):
         with h5py.File(args.out_path + split + "_%d.hdf5" % (i+1), 'w') as f:
             ins, outs = create_episodes(data, n_episodes)
-            pdb.set_trace()
             f['ins'] = ins
             f['outs'] = outs
         del ins, outs

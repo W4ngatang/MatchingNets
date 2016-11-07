@@ -46,7 +46,7 @@ function make_matching_net(opt)
     --   -> IndexAdd -> B x N x N*kb
     --   -> Transpose -> B x N*kB x N
     --   -> View -> B*N*kB x N
-    local match_scores = nn.MM(false, true)({batch_g, batch_f})
+    local match_scores = nn.MM2(false, true)({batch_g, batch_f})
     local class_scores = nn.IndexAdd(1, opt.N)({match_scores, inputs[3]})
     local unbatch = nn.View(-1, opt.N)(nn.Transpose({2,3})(class_scores))
 
