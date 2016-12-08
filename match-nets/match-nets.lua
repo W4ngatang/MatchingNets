@@ -31,7 +31,6 @@ function make_matching_net(opt)
     -- out: B x N*k x 64
     local g
     if opt.share_embed == 1 then
-        print('\tTying embedding function parameters...')
         g = f
     else
         g = make_cnn(opt)
@@ -43,26 +42,21 @@ function make_matching_net(opt)
     
     -- in: (B x N*kB x 64) , (B x N*k x 64)
     --   -> MM: -> B x N*k x N*kB
+    --   -> View -> (B * N*kB) x N*k
+    --   -> SoftMax -> (B * N*kB) x N*k
+    --   -> View -> B x N*k x N*kB
     --   -> IndexAdd -> B x N x N*kb
     --   -> Transpose -> B x N*kB x N
     --   -> View -> B*N*kB x N
-    local match_scores = nn.MM2(false, true)({batch_g, batch_f})
-    local class_scores = nn.IndexAdd(1, opt.N)({match_scores, inputs[3]})
-    local unbatch = nn.View(-1, opt.N)(nn.Transpose({2,3})(class_scores))
-
-    local crit
-    local outputs = {}
-    if opt.match_fn == 'softmax' then
-        local probs = nn.LogSoftMax()(unbatch)
-        table.insert(outputs, probs)
-        crit = nn.ClassNLLCriterion()
-    elseif opt.match_fn == 'cosine' then -- TODO
-        table.insert(outputs, class_scores)
-        crit = nn.CosineEmbeddingCriterion()
-    else
-        print("Matching function " .. opt.match_fn .. " not supported!")
-        return
-    end
+    local cos_dist = nn.MM2(false, true)({batch_g, batch_f})
+    local unbatch1 = nn.View(-1, opt.N*opt.k)(cos_dist)
+    local attn_scores = nn.SoftMax()(unbatch1)
+    local rebatch = nn.View(-1, opt.N*opt.k, opt.N*opt.kB)(attn_scores)
+    local class_scores = nn.IndexAdd(1, opt.N)({rebatch, inputs[3]})
+    local unbatch2 = nn.View(-1, opt.N)(nn.Transpose({2,3})(class_scores))
+    local log_probs = nn.Log2()(unbatch2)
+    local outputs = {log_probs}
+    local crit = nn.ClassNLLCriterion()
 
     return nn.gModule(inputs, outputs), crit
 
@@ -101,17 +95,17 @@ function make_cnn_module(opt, n_input_feats)
         -- conv height and width change every layer
         local conv_layer = cudnn.SpatialConvolution(n_input_feats, opt.n_kernels, 
             conv_w, conv_h, 1, 1, pad_w, pad_h)(input)
-        local norm_layer = cudnn.SpatialBatchNormalization(opt.n_kernels)(conv_layer)
+        local norm_layer = cudnn.SpatialBatchNormalization(opt.n_kernels, nil, nil)(conv_layer)
         local pool_layer = cudnn.SpatialMaxPooling(
             pool_w, pool_h, pool_w, pool_h)(nn.ReLU()(norm_layer))
-        output = (pool_layer)
+        output = pool_layer
     else
         local conv_layer = nn.SpatialConvolution(n_input_feats, opt.n_kernels,
             conv_w, conv_h, 1, 1, pad_w, pad_h)(input)
         local norm_layer = nn.SpatialBatchNormalization(opt.n_kernels)(conv_layer)
         local pool_layer = nn.SpatialMaxPooling(
             pool_w, pool_h, pool_w, pool_h)(nn.ReLU()(norm_layer))
-        output = (pool_layer)
+        output = pool_layer
     end
     return nn.gModule({input},{output})
 end

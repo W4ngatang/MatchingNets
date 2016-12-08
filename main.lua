@@ -1,6 +1,7 @@
 require 'torch'
 require 'nn'
 require 'optim'
+require 'graph'
 
 package.path = package.path .. ";" .. os.getenv("HOME") .. 
     "/MatchingNets/match-nets/?.lua" .. ";" .. os.getenv("HOME")
@@ -11,6 +12,7 @@ require 'match-nets'
 require 'MapTable'
 require 'IndexAdd'
 require 'MM2'
+require 'Log2'
 
 require 'nngraph'
 require 'hdf5'
@@ -28,9 +30,11 @@ cmd:option('--cudnn', 1, '1 if use cudnn')
 cmd:option('--datafile', '', 'path to folder containing data files')
 cmd:option('--data_folder', '', 'path to folder containing data files')
 cmd:option('--logfile', '', 'file to log messages to')
+cmd:option('--print_freq', 5, 'how often to print training messages')
 
 -- Model options --
 cmd:option('--init_scale', .05, 'scale of initial parameters')
+cmd:option('--init_dist', 'normal', 'distribution to draw  initial parameters')
 cmd:option('--share_embed', 0, '1 if share parameters between embedding functions')
 cmd:option('--match_fn', 'softmax', 'Function to score matches')
 cmd:option('--embed_fn', '', 'Function to embed inputs')
@@ -46,13 +50,14 @@ cmd:option('--pool_height', 2, 'max pooling filter height')
 
 -- Training options --
 cmd:option('--n_epochs', 10, 'number of training epochs')
-cmd:option('--optimizer', 'sgd', 'optimizer to use (from optim)')
+cmd:option('--optimizer', 'adagrad', 'optimizer to use (from optim)')
 cmd:option('--learning_rate', .001, 'initial learning rate')
 cmd:option('--learning_rate_decay', .01, 'learning rate decay') -- maybe want .99
 cmd:option('--momentum', .5, 'momentum')
-cmd:option('--halve_learning_rate', 1, '1 if halve learning rate if val score decreases between successive epochs')
+cmd:option('--rho', .95, 'Adadelta interpolation parameter')
+cmd:option('--halve_learning_rate', 0, '1 if halve learning rate if val score decreases between successive epochs')
 cmd:option('--batch_size', 1, 'number of episodes per batch')
-cmd:option('--max_grad_norm', 5, 'maximum gradient value')
+cmd:option('--max_grad_norm', 0, 'maximum gradient value')
 
 function log(file, msg)
     print(msg)
@@ -61,7 +66,14 @@ end
 
 function train(model, crit)
     local params, grad_params = model:getParameters()
-    params:uniform(-opt.init_scale, opt.init_scale)
+    if opt.init_dist == 'normal' then
+        params:normal(0, opt.init_scale)
+    elseif opt.init_dist == 'uniform' then
+        params:uniform(-opt.init_scale, opt.init_scale)
+    else
+        log(file, 'Unsupported distribution for initialization!')
+        return
+    end
 
     --[[ Optimization ]]--
     local inputs, targs, total_loss
@@ -73,12 +85,13 @@ function train(model, crit)
         local grad_loss = crit:backward(outs, targs)
         model:backward(inputs, grad_loss)
         local grad_norm = grad_params:norm()
-        if grad_norm > opt.max_grad_norm then
+        if opt.max_grad_norm > 0 and grad_norm > opt.max_grad_norm then
             grad_params:mul(opt.max_grad_norm / grad_norm)
         end
         return loss, grad_params
     end
     local optimize, optim_state
+    log(file, "\tOptimizing with " .. opt.optimizer)
     if opt.optimizer == 'sgd' then
         optim_state = { -- NB: Siamese paper used layerwise LR and momentum
             learningRate = opt.learning_rate,
@@ -92,10 +105,20 @@ function train(model, crit)
             learningRate = opt.learning_rate
         }
         optimize = optim.adagrad
+        log(file, "\t\twith learning rate " .. opt.learning_rate)
+    elseif opt.optimizer == 'adadelta' then
+        optim_state = {
+            rho = opt.rho,
+            eps = 1e-8
+        }
+        optimize = optim.adadelta
+        log(file, "\t\twith rho " .. opt.rho)
     else
         error('Unknown optimizer!')
     end
-    log(file, "\tOptimizing with " .. opt.optimizer)
+    if opt.max_grad_norm > 0 then
+        log(file, "\t\twith max gradient norm: " .. opt.max_grad_norm)
+    end
 
     --[[ Training Loop ]]--
     local timer = torch.Timer()
@@ -103,7 +126,7 @@ function train(model, crit)
     local best_score = last_score
     log(file, "\tInitial validation accuracy: " .. last_score)
     for epoch = 1, opt.n_epochs do
-        log(file, "Epoch " ..epoch .. ", learning rate " .. optim_state['learningRate'])
+        log(file, "Epoch " ..epoch)
         timer:reset()
         total_loss = 0
         for shard_n = 1, opt.n_tr_shards do
@@ -116,7 +139,9 @@ function train(model, crit)
                 inputs, targs = episode[1], episode[2]
                 optimize(feval, params, optim_state)
             end
-            log(file, "\t  Completed " .. shard_n/opt.n_tr_shards*100 .. "% in " ..timer:time().real .. " seconds")
+            if shard_n % (10/opt.print_freq) == 0 then
+                log(file, "\t  Completed " .. shard_n/opt.n_tr_shards*100 .. "% in " ..timer:time().real .. " seconds")
+            end
             tr_ins = nil
             tr_outs = nil
             tr_data = nil
@@ -126,7 +151,7 @@ function train(model, crit)
         timer:reset()
         val_score = evaluate(model, "val")
         log(file, "\tValidation time " .. timer:time().real .. " seconds")
-        if opt.halve_learning_rate and val_score < last_score then
+        if opt.halve_learning_rate > 0 and val_score < last_score then
             optim_state['learningRate'] = optim_state['learningRate']/2
         end
         if val_score > best_score then
@@ -134,14 +159,13 @@ function train(model, crit)
             best_score = val_score
         end
         last_score = val_score
-        log(file, "\tLoss: " .. total_loss)
-        log(file, "\tValidation accuracy: " .. val_score)
-        log(file, "\tBest accuracy: " .. best_score)
+        log(file, "\tLoss: " .. total_loss .. ", Validation accuracy: " .. val_score .. ", Best accuracy: " .. best_score)
+        --log(file, "\tValidation accuracy: " .. val_score)
+        --log(file, "\tBest accuracy: " .. best_score)
     end
 end
 
 function evaluate(model, split)
-    local last_loss = 1e9
     local n_preds = 0
     local n_correct = 0
     local n_shards = opt.n_te_shards
@@ -191,8 +215,8 @@ function main()
         cutorch.setDevice(opt.gpuid)
         cutorch.manualSeed(opt.seed)
     end
-    -- TODO append / to data_folder
-
+    -- TODO append '/' to data_folder
+    
     log(file, 'Loading parameters...')
     local f = hdf5.open(opt.data_folder .. 'params.hdf5', 'r')
     opt.n_tr_shards = f:read('n_tr_shards'):all()[1]
@@ -206,9 +230,10 @@ function main()
    -- build model
     log(file, 'Building model...')
     if opt.share_embed == 1 then
-        print('\tTying embedding function parameters...')
+        log(file, '\tTying embedding function parameters...')
     end
     model, crit = make_matching_net(opt)
+    --graph.dot(model.fg, 'match-net', 'my-match-net')
     if opt.gpuid > 0 then
         model = model:cuda()
         crit = crit:cuda()

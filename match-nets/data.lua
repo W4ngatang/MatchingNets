@@ -19,8 +19,8 @@ function data:__init(opt, datasets)
     self.perm = torch.randperm(self.n_batches):type('torch.LongTensor')
 
     local inds = torch.range(1, self.N):reshape(self.N, 1):long()
-    local set_ys = inds:repeatTensor(1,self.k):view(-1):long()
-    local bat_ys = inds:repeatTensor(1,self.kB):view(-1):long()
+    local set_ys = inds:repeatTensor(1,self.k):view(-1) -- format into [1 1 1 .. 2 2 2 ... N N N]
+    local bat_ys = inds:repeatTensor(1,self.kB):view(-1)
     self.set_ys = set_ys
     self.bat_ys = bat_ys
 end
@@ -31,7 +31,7 @@ function data.__index(self,idx)
         return data[idx]
     else
         if idx > self.n_batches then
-            return "Error"
+            return "Error: invalid batch size"
         end
         local B = self.batch_size
         local set_size = self.N * self.k
@@ -43,14 +43,14 @@ function data.__index(self,idx)
         local set_xs = torch.zeros(B*set_size,self.xs:size(3),self.xs:size(4))
         local set_ys = torch.zeros(B,set_size):long()
         local bat_xs = torch.zeros(B*bat_size,self.xs:size(3),self.xs:size(4))
-        local bat_ys = torch.zeros(B*bat_size):long()
+        local bat_ys = torch.zeros(B*bat_size):long() -- one-dim tensor for easy evaluation
 
-        for i=1,B do -- shuffle within batches
+        for i=1,B do -- shuffle within episode
             shuffle = torch.randperm(set_size):long()
             set_xs:narrow(1,(i-1)*set_size+1,set_size):index(meta_xs[i]:narrow(1,1,set_size),1, shuffle)
             set_ys[i]:index(self.set_ys,1,shuffle)
 
-            shuffle = torch.randperm(bat_size):long():long()
+            shuffle = torch.randperm(bat_size):long()
             bat_xs:narrow(1,(i-1)*bat_size+1,bat_size):index(meta_xs[i]:narrow(1,set_size+1,bat_size),1, shuffle)
             bat_ys:narrow(1,(i-1)*bat_size+1,bat_size):index(self.bat_ys,1,shuffle)
         end

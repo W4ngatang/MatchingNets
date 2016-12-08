@@ -21,7 +21,7 @@ end
 --      inds: B x p
 -- out: B x N x q
 function IndexAdd:updateOutput(input)
-    assert(#input == 2, 'input must be a tensor and indices')
+    assert(#input == 2, 'input must be a table of a tensor and indices')
     local t, inds = table.unpack(input)
     assert(t:nDimension() == 2 or t:nDimension() == 3, 'input tensors must be 2D or 3D')
 
@@ -43,7 +43,7 @@ function IndexAdd:updateOutput(input)
 end
 
 function IndexAdd:updateGradInput(input, gradOutput)
-    assert(#input == 2, 'input must be a tensor and indices')
+    assert(#input == 2, 'input must be a table of a tensor and indices')
     local t, inds = table.unpack(input)
     assert(gradOutput:nDimension() == 2 or gradOutput:nDimension() == 3, 'arguments must be a 2D or 3D tensor')
 
@@ -60,17 +60,10 @@ function IndexAdd:updateGradInput(input, gradOutput)
         assert(t:nDimension() == 3, 'input tensor must be 3D')
         assert(inds:nDimension() == 2, 'index tensor must be 2D')
         for b = 1, t:size(1) do             -- for each batch
-            for i = 1, inds[b]:nElement() do   -- do reverse indexAdd
-                gradInput:sub(b,b,i,i):add(gradOutput:sub(b,b,inds[b][i],inds[b][i]))
+            for i = 1, inds:size(2) do   -- do reverse indexAdd
+                gradInput[b][i]:add(gradOutput[b][inds[b][i]])
             end
         end
     end
     return self.gradInput
-end
-
-function IndexAdd:clearState()
-    self.gradInput[1]:set()
-    self.gradInput[2]:set()
-    self.output:set()
-    return self
 end
