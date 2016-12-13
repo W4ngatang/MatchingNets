@@ -95,7 +95,7 @@ function make_cnn_module(opt, n_input_feats)
         -- conv height and width change every layer
         local conv_layer = cudnn.SpatialConvolution(n_input_feats, opt.n_kernels, 
             conv_w, conv_h, 1, 1, pad_w, pad_h)(input)
-        local norm_layer = cudnn.SpatialBatchNormalization(opt.n_kernels, nil, nil)(conv_layer)
+        local norm_layer = cudnn.SpatialBatchNormalization(opt.n_kernels)(conv_layer)
         local pool_layer = cudnn.SpatialMaxPooling(
             pool_w, pool_h, pool_w, pool_h, opt.pool_pad, opt.pool_pad)(
             nn.ReLU()(norm_layer))

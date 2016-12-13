@@ -123,6 +123,7 @@ function train(model, crit)
     end
 
     --[[ Training Loop ]]--
+    model:training()
     local timer = torch.Timer()
     local last_score = evaluate(model, "val")
     local best_score = last_score
@@ -152,6 +153,7 @@ function train(model, crit)
         log(file, "\tTraining time: " .. timer:time().real .. " seconds")
         timer:reset()
         val_score = evaluate(model, "val")
+        model:training()
         log(file, "\tValidation time " .. timer:time().real .. " seconds")
         if opt.halve_learning_rate > 0 and val_score < last_score then
             optim_state['learningRate'] = optim_state['learningRate']/2
@@ -168,6 +170,7 @@ function train(model, crit)
 end
 
 function evaluate(model, split)
+    model:evaluate()
     local n_preds = 0
     local n_correct = 0
     local n_shards = opt.n_te_shards
