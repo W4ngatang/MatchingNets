@@ -33,7 +33,7 @@ cmd:option('--logfile', '', 'file to log messages to')
 cmd:option('--print_freq', 5, 'how often to print training messages')
 
 -- Model options --
-cmd:option('--init_scale', .05, 'scale of initial parameters')
+cmd:option('--init_scale', .01, 'scale of initial parameters')
 cmd:option('--init_dist', 'normal', 'distribution to draw  initial parameters')
 cmd:option('--share_embed', 0, '1 if share parameters between embedding functions')
 cmd:option('--match_fn', 'softmax', 'Function to score matches')
@@ -45,8 +45,10 @@ cmd:option('--n_modules', 4, 'number of convolutional units to stack')
 cmd:option('--n_kernels', 64, 'number of convolutional filters')
 cmd:option('--conv_width', 3, 'convolution filter width')
 cmd:option('--conv_height', 3, 'convolution filter height')
+cmd:option('--pool_ceil', false, 'if true, ceil in pool dimension, else floor')
 cmd:option('--pool_width', 2, 'max pooling filter width')
 cmd:option('--pool_height', 2, 'max pooling filter height')
+cmd:option('--pool_pad', 0, 'max pool padding')
 
 -- Training options --
 cmd:option('--n_epochs', 10, 'number of training epochs')
