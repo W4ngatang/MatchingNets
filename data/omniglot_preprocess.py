@@ -7,8 +7,6 @@ import h5py
 import pdb
 
 n_ex_per_class = 20
-im_size = 28
-thresh = 128
 
 '''
 
@@ -18,7 +16,10 @@ Threshold arbitrarily chosen as 128
 
 '''
 def load_image(f):
-    return np.logical_not(imread(f)/thresh).astype(float)
+    if thresh > 0:
+        return np.logical_not(imread(f)/thresh).astype(float)
+    else:
+        return 1 - (imread(f).astype(float)/255)
 
 '''
 
@@ -57,7 +58,7 @@ def load_data(path, split=1):
                     data[ex_idx,:,:] = load_image(char_path+'/'+im)
                 count += 1
             if not (count % int(n_classes/10)):
-                print '\tFinished %d classes' % count
+                print '\tFinished %d classes\n' % count
     except Exception as e:
         pdb.set_trace()
     return data, n_classes
@@ -139,12 +140,14 @@ def main(arguments):
     parser.add_argument('--n_val_episodes', help='number of val episodes per shard', type=int, default=10000)
     parser.add_argument('--n_te_episodes', help='number of te episodes per shard', type=int, default=10000)
     parser.add_argument('--splits', help='string containing fractions for train, validation, test sets respectively, e.g. .8,.1,.1', type=str, default='.76,.12,.12')
+    
     parser.add_argument('--im_dim', help='dim of image along a side', type=int, default=28)
+    parser.add_argument('--thresh', help='threshold for image binarization, 0 for none', type=int, default=128)
     args = parser.parse_args(arguments)
     
     # load all the examples for every class
     print 'Loading data...'
-    global im_size
+    global im_size, thresh
     if args.load_data_from:
         print '\tReading data from %s' % args.load_data_from
         f = h5py.File(args.load_data_from, 'r')
@@ -155,6 +158,7 @@ def main(arguments):
     else:
         print '\tReading data from images'
         im_size = args.im_dim
+        thresh = args.thresh
         bg_data, n_bg_classes  = load_data(args.data_path + '/' + 'images_background')
         eval_data, n_eval_classes = load_data(args.data_path + '/' + 'images_evaluation')
 

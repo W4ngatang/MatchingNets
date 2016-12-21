@@ -13,6 +13,7 @@ require 'MapTable'
 require 'IndexAdd'
 require 'MM2'
 require 'Log2'
+require 'Normalize2'
 
 require 'nngraph'
 require 'hdf5'
@@ -45,7 +46,8 @@ cmd:option('--n_modules', 4, 'number of convolutional units to stack')
 cmd:option('--n_kernels', 64, 'number of convolutional filters')
 cmd:option('--conv_width', 3, 'convolution filter width')
 cmd:option('--conv_height', 3, 'convolution filter height')
-cmd:option('--pool_ceil', false, 'if true, ceil in pool dimension, else floor')
+cmd:option('--conv_pad', 1, 'convolutional padding')
+cmd:option('--pool_ceil', 0, '1 if ceil in pooling dimension, else floor')
 cmd:option('--pool_width', 2, 'max pooling filter width')
 cmd:option('--pool_height', 2, 'max pooling filter height')
 cmd:option('--pool_pad', 0, 'max pool padding')
@@ -54,9 +56,11 @@ cmd:option('--pool_pad', 0, 'max pool padding')
 cmd:option('--n_epochs', 10, 'number of training epochs')
 cmd:option('--optimizer', 'adagrad', 'optimizer to use (from optim)')
 cmd:option('--learning_rate', .001, 'initial learning rate')
-cmd:option('--learning_rate_decay', .01, 'learning rate decay') -- maybe want .99
+cmd:option('--learning_rate_decay', .00, 'learning rate decay')
 cmd:option('--momentum', .5, 'momentum')
 cmd:option('--rho', .95, 'Adadelta interpolation parameter')
+cmd:option('--beta1', .9, 'Adam beta1 parameter')
+cmd:option('--beta2', .999, 'Adam beta2 parameter')
 cmd:option('--halve_learning_rate', 0, '1 if halve learning rate if val score decreases between successive epochs')
 cmd:option('--batch_size', 1, 'number of episodes per batch')
 cmd:option('--max_grad_norm', 0, 'maximum gradient value')
@@ -115,6 +119,18 @@ function train(model, crit)
         }
         optimize = optim.adadelta
         log(file, "\t\twith rho " .. opt.rho)
+    elseif opt.optimizer == 'adam' then
+        optim_state = {
+            learningRate = opt.learning_rate,
+            learningRateDecay = opt.learning_rate_decay,
+            beta1 = opt.beta1,
+            beta2 = opt.beta2
+        }
+        optimize = optim.adam
+        log(file, "\t\twith learning rate " .. opt.learning_rate)
+        log(file, "\t\twith learning rate decay " .. opt.learning_rate_decay)
+        log(file, "\t\twith beta1 " .. opt.beta1)
+        log(file, "\t\twith beta2 " .. opt.beta2)
     else
         error('Unknown optimizer!')
     end
@@ -123,12 +139,12 @@ function train(model, crit)
     end
 
     --[[ Training Loop ]]--
-    model:training()
     local timer = torch.Timer()
     local last_score = evaluate(model, "val")
     local best_score = last_score
     log(file, "\tInitial validation accuracy: " .. last_score)
     for epoch = 1, opt.n_epochs do
+        model:training()
         log(file, "Epoch " ..epoch)
         timer:reset()
         total_loss = 0
@@ -153,7 +169,6 @@ function train(model, crit)
         log(file, "\tTraining time: " .. timer:time().real .. " seconds")
         timer:reset()
         val_score = evaluate(model, "val")
-        model:training()
         log(file, "\tValidation time " .. timer:time().real .. " seconds")
         if opt.halve_learning_rate > 0 and val_score < last_score then
             optim_state['learningRate'] = optim_state['learningRate']/2

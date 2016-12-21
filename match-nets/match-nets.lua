@@ -1,3 +1,8 @@
+package.path = package.path .. ";" .. os.getenv("HOME") .. 
+    "/MatchingNets/match-nets/?.lua" .. ";" .. os.getenv("HOME")
+    .. "/MatchingNets/debugger.lua/?.lua"
+local dbg = require 'debugger'
+
 --
 -- Various models used throughout experiments
 --
@@ -18,7 +23,7 @@ function make_matching_net(opt)
     -- out: B x N*kB x 64
     local f = make_cnn(opt)
     local embed_f = nn.Squeeze()(f(nn.Unsqueeze(2)(inputs[1])))
-    local norm_f = nn.Normalize(2)(embed_f)
+    local norm_f = nn.Normalize2(2)(embed_f)
     local batch_f = nn.View(-1, opt.N*opt.kB, opt.n_kernels)(norm_f)
 
     -- in: B*N*k x im x im
@@ -35,7 +40,7 @@ function make_matching_net(opt)
         g = make_cnn(opt)
     end
     local embed_g = nn.Squeeze()(g(nn.Unsqueeze(2)(inputs[2])))
-    local norm_g = nn.Normalize(2)(embed_g)
+    local norm_g = nn.Normalize2(2)(embed_g)
     local batch_g = nn.View(-1, opt.N*opt.k, opt.n_kernels)(norm_g)
     
     -- in: (B x N*kB x 64) , (B x N*k x 64)
@@ -83,8 +88,8 @@ end
 function make_cnn_module(opt, n_input_feats)
     local conv_w = opt.conv_width
     local conv_h = opt.conv_height
-    local pad_w = math.floor((conv_w - 1) / 2)
-    local pad_h = math.floor((conv_h - 1) / 2)
+    local pad_w = opt.conv_pad --math.floor((conv_w - 1) / 2)
+    local pad_h = opt.conv_pad --math.floor((conv_h - 1) / 2)
     local pool_w = opt.pool_width
     local pool_h = opt.pool_height
 
@@ -95,14 +100,13 @@ function make_cnn_module(opt, n_input_feats)
         -- conv height and width change every layer
         local conv_layer = cudnn.SpatialConvolution(n_input_feats, opt.n_kernels, 
             conv_w, conv_h, 1, 1, pad_w, pad_h)(input)
-        local norm_layer = cudnn.SpatialBatchNormalization(opt.n_kernels)(conv_layer)
+        local norm_layer = nn.SpatialBatchNormalization(opt.n_kernels)(conv_layer)
         local pool_layer = cudnn.SpatialMaxPooling(
-            pool_w, pool_h, pool_w, pool_h, opt.pool_pad, opt.pool_pad)(
-            nn.ReLU()(norm_layer))
-        if opt.ceil then
+            pool_w, pool_h, pool_w, pool_h, opt.pool_pad, opt.pool_pad)
+        if opt.pool_ceil == 1 then
             pool_layer:ceil()
         end
-        output = pool_layer
+        output = pool_layer(nn.ReLU()(norm_layer))
     else
         local conv_layer = nn.SpatialConvolution(n_input_feats, opt.n_kernels,
             conv_w, conv_h, 1, 1, pad_w, pad_h)(input)
@@ -110,7 +114,7 @@ function make_cnn_module(opt, n_input_feats)
         local pool_layer = nn.SpatialMaxPooling(
             pool_w, pool_h, pool_w, pool_h, opt.pool_pad, opt.pool_pad)(
             nn.ReLU()(norm_layer))
-        if opt.ceil then
+        if opt.pool_ceil == 1 then
             pool_layer:ceil()
         end
         output = pool_layer
