@@ -2,7 +2,7 @@ import os
 import sys
 import argparse
 import numpy as np
-from scipy.ndimage import imread
+from scipy.misc import imread, imresize
 import h5py
 import pdb
 
@@ -12,14 +12,18 @@ n_ex_per_class = 20
 
 Due to resizing, images are no longer purely black and white
 Rounding to 0 or 1 based on a threshold seems ok
-Threshold arbitrarily chosen as 128
+Threshold arbitrarily chosen as .5
 
 '''
-def load_image(f):
-    if thresh > 0:
-        return np.logical_not(imread(f)/thresh).astype(float)
+def load_image(args, f):
+    im = imread(f, flatten=True)
+    if args.resize > 0:
+        im = np.asarray(imresize(im, size=(args.resize, args.resize)))
+    im /= 255.
+    if args.thresh > 0:
+        return (im / thresh).astype(int)
     else:
-        return 1 - (imread(f).astype(float)/255)
+        return im
 
 '''
 
@@ -42,7 +46,7 @@ def load_data(path, split=1):
         n_classes = 0
         for alphabet in alphabets:
             n_classes += len(os.listdir(path + '/' + alphabet))
-        data = np.zeros((n_classes*n_ex_per_class, im_size, im_size))
+        data = np.zeros((n_classes*n_ex_per_class, args.im_dim, args.im_dim))
         print '\t%d classes to load' % n_classes
         
         count = 0
@@ -66,7 +70,7 @@ def load_data(path, split=1):
 def augment(data):
     try:
         n_data = data.shape[0]
-        augmented = np.zeros((n_data*4, im_size, im_size))
+        augmented = np.zeros((n_data*4, args.im_dim, args.im_dim))
         for i, datum in enumerate(data):
             for j in xrange(4):
                 augmented[j*n_data+i, :, :] = np.rot90(datum, j)
@@ -84,13 +88,13 @@ Data will be arranged as follows: n_episodes x (N * (k+kb)) x im_size x im_size
 [ episode N ]
 
 '''
-def create_episodes(data, n_episodes, rot=True):
+def create_episodes(data, n_episodes):
     try:
         k, kB = args.k, args.kB
         n_classes = data.shape[0] / n_ex_per_class
         n_examples = k + kB # n examples per class per episode
         base_bat_offset = args.N * k
-        inputs = np.zeros((n_episodes, args.N * n_examples, im_size, im_size))
+        inputs = np.zeros((n_episodes, args.N * n_examples, args.im_dim, args.im_dim))
         outputs = np.zeros((n_episodes, args.N * n_examples, 1))
 
         # for each episode, sample N classes
@@ -99,7 +103,7 @@ def create_episodes(data, n_episodes, rot=True):
             episode_classes = np.random.choice(n_classes, args.N, replace=False)
             for j,c in enumerate(episode_classes):
                 exs = np.random.choice(n_ex_per_class, n_examples, replace=False) + \
-                        (c * n_ex_per_class)
+                        (c * n_ex_per_class) # offset for the class
                 set_offset = j*k
                 bat_offset = base_bat_offset + j*kB
                 inputs[i,set_offset:set_offset+k,:,:] = data[exs[:k],:,:]
@@ -117,8 +121,7 @@ def create_shards(data, n_episodes, n_shards, split):
             f['ins'] = ins
             f['outs'] = outs
         del ins, outs
-        print '\t%d..' % (i+1),
-    print '\n',
+        print '\t%d..' % (i+1)
 
 def main(arguments):
     global args
@@ -142,28 +145,26 @@ def main(arguments):
     parser.add_argument('--splits', help='string containing fractions for train, validation, test sets respectively, e.g. .8,.1,.1', type=str, default='.76,.12,.12')
     
     parser.add_argument('--im_dim', help='dim of image along a side', type=int, default=28)
-    parser.add_argument('--thresh', help='threshold for image binarization, 0 for none', type=int, default=128)
+    parser.add_argument('--thresh', help='threshold (in (0,1)) for image binarization, 0 for none', type=float, default=0.)
+    parser.add_argument('--resize', help='dimension (along a side) to resize to, 0 for none', type=int, default=28)
     args = parser.parse_args(arguments)
     
     # load all the examples for every class
     print 'Loading data...'
-    global im_size, thresh
     if args.load_data_from:
         print '\tReading data from %s' % args.load_data_from
         f = h5py.File(args.load_data_from, 'r')
         data = f['data'][:]
         n_classes =  f['n_classes'][:][0]
         f.close()
-        im_size = data.shape[1]
+        args.im_dim = data.shape[1]
     else:
         print '\tReading data from images'
-        im_size = args.im_dim
-        thresh = args.thresh
         bg_data, n_bg_classes  = load_data(args.data_path + '/' + 'images_background')
         eval_data, n_eval_classes = load_data(args.data_path + '/' + 'images_evaluation')
 
         n_classes = n_bg_classes + n_eval_classes
-        data = np.zeros((bg_data.shape[0]+eval_data.shape[0], im_size, im_size))
+        data = np.zeros((bg_data.shape[0]+eval_data.shape[0], args.im_dim, args.im_dim))
         data[:bg_data.shape[0]] = bg_data
         data[bg_data.shape[0]:] = eval_data
 

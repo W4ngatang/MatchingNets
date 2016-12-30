@@ -23,7 +23,7 @@ function make_matching_net(opt)
     -- out: B x N*kB x 64
     local f = make_cnn(opt)
     local embed_f = nn.Squeeze()(f(nn.Unsqueeze(2)(inputs[1])))
-    local norm_f = nn.Normalize2(2)(embed_f)
+    local norm_f = nn.Normalize(2)(embed_f)
     local batch_f = nn.View(-1, opt.N*opt.kB, opt.n_kernels)(norm_f)
 
     -- in: B*N*k x im x im
@@ -40,7 +40,7 @@ function make_matching_net(opt)
         g = make_cnn(opt)
     end
     local embed_g = nn.Squeeze()(g(nn.Unsqueeze(2)(inputs[2])))
-    local norm_g = nn.Normalize2(2)(embed_g)
+    local norm_g = nn.Normalize(2)(embed_g)
     local batch_g = nn.View(-1, opt.N*opt.k, opt.n_kernels)(norm_g)
     
     -- in: (B x N*kB x 64) , (B x N*k x 64)
@@ -59,7 +59,7 @@ function make_matching_net(opt)
     local rebatch = nn.Transpose({2,3})(nn.View(-1, opt.N*opt.kB, opt.N*opt.k)(attn_scores))
     local class_probs = nn.IndexAdd(1, opt.N)({rebatch, inputs[3]})
     local unbatch2 = nn.View(-1, opt.N)(nn.Transpose({2,3})(class_probs))
-    local log_probs = nn.Log2()(unbatch2)
+    local log_probs = nn.Log()(unbatch2)
     local outputs = {log_probs}
     local crit = nn.ClassNLLCriterion()
 

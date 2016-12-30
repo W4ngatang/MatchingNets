@@ -3,24 +3,23 @@ require 'nn'
 require 'optim'
 require 'graph'
 
+-- debugging library because lua doesn't seem to have one
 package.path = package.path .. ";" .. os.getenv("HOME") .. 
     "/MatchingNets/match-nets/?.lua" .. ";" .. os.getenv("HOME")
     .. "/MatchingNets/debugger.lua/?.lua"
 local dbg = require 'debugger'
+
 require 'data'
 require 'match-nets'
 require 'MapTable'
 require 'IndexAdd'
-require 'MM2'
-require 'Log2'
-require 'Normalize2'
 
 require 'nngraph'
 require 'hdf5'
 
 cmd = torch.CmdLine()
 cmd:text()
-cmd:text('Training a matching network')
+cmd:text('Train a matching network')
 cmd:text('Options')
 
 cmd:option('--seed', 42, 'random seed')
@@ -31,11 +30,12 @@ cmd:option('--cudnn', 1, '1 if use cudnn')
 cmd:option('--datafile', '', 'path to folder containing data files')
 cmd:option('--data_folder', '', 'path to folder containing data files')
 cmd:option('--logfile', '', 'file to log messages to')
+cmd:option('--predfile', '', 'file to print test predictions to')
 cmd:option('--print_freq', 5, 'how often to print training messages')
 
 -- Model options --
-cmd:option('--init_scale', .01, 'scale of initial parameters')
-cmd:option('--init_dist', 'normal', 'distribution to draw  initial parameters')
+cmd:option('--init_scale', .05, 'scale of initial parameters')
+cmd:option('--init_dist', 'uniform', 'distribution to draw  initial parameters')
 cmd:option('--share_embed', 0, '1 if share parameters between embedding functions')
 cmd:option('--match_fn', 'softmax', 'Function to score matches')
 cmd:option('--embed_fn', '', 'Function to embed inputs')
@@ -57,7 +57,7 @@ cmd:option('--n_epochs', 10, 'number of training epochs')
 cmd:option('--optimizer', 'adagrad', 'optimizer to use (from optim)')
 cmd:option('--learning_rate', .001, 'initial learning rate')
 cmd:option('--learning_rate_decay', .00, 'learning rate decay')
-cmd:option('--momentum', .5, 'momentum')
+cmd:option('--momentum', 0, 'momentum')
 cmd:option('--rho', .95, 'Adadelta interpolation parameter')
 cmd:option('--beta1', .9, 'Adam beta1 parameter')
 cmd:option('--beta2', .999, 'Adam beta2 parameter')
@@ -71,7 +71,7 @@ function log(file, msg)
 end
 
 function train(model, crit)
-    local params, grad_params = model:getParameters()
+    params, grad_params = model:getParameters()
     if opt.init_dist == 'normal' then
         params:normal(0, opt.init_scale)
     elseif opt.init_dist == 'uniform' then
@@ -106,6 +106,9 @@ function train(model, crit)
             learningRateDecay = opt.learning_rate_decay
         }
         optimize = optim.sgd
+        log(file, "\t\twith learning rate " .. opt.learning_rate)
+        log(file, "\t\twith learning rate decay " .. opt.learning_rate_decay)
+        log(file, "\t\twith momentum " .. opt.momentum)
     elseif opt.optimizer == 'adagrad' then
         optim_state = {
             learningRate = opt.learning_rate
@@ -136,6 +139,9 @@ function train(model, crit)
     end
     if opt.max_grad_norm > 0 then
         log(file, "\t\twith max gradient norm: " .. opt.max_grad_norm)
+    end
+    if opt.halve_learning_rate > 0 then
+        log(file, "\t\twith halving learning rate")
     end
 
     --[[ Training Loop ]]--
@@ -172,6 +178,7 @@ function train(model, crit)
         log(file, "\tValidation time " .. timer:time().real .. " seconds")
         if opt.halve_learning_rate > 0 and val_score < last_score then
             optim_state['learningRate'] = optim_state['learningRate']/2
+            log(file, "\tLearning rate halved to " .. optim_state['learningRate'])
         end
         if val_score > best_score then
             -- TODO: save the model
@@ -184,7 +191,7 @@ function train(model, crit)
     end
 end
 
-function evaluate(model, split)
+function evaluate(model, split, fh)
     model:evaluate()
     local n_preds = 0
     local n_correct = 0
@@ -202,14 +209,19 @@ function evaluate(model, split)
 
         for i = 1, sp_data.n_batches do
             local episode = sp_data[i]
-            local inputs, targs = episode[1], episode[2]
+            inputs, targs = episode[1], episode[2]
             local outputs = model:forward(inputs)
-            local maxes, preds = torch.max(outputs, 2)
+            maxes, preds = torch.max(outputs, 2)
             if opt.gpuid > 0 then
                 preds = preds:cuda()
             end
             n_correct = n_correct + torch.sum(torch.eq(preds, targs))
             n_preds = n_preds + targs:nElement()
+            if fh ~= nil then
+                for j = 1, preds:nElement() do
+                    fh:write(preds[j][1] .. ', ' .. targs[j] .. "\n")
+                end
+            end
         end
         ins = nil
         outs = nil
@@ -235,7 +247,6 @@ function main()
         cutorch.setDevice(opt.gpuid)
         cutorch.manualSeed(opt.seed)
     end
-    -- TODO append '/' to data_folder
     
     log(file, 'Loading parameters...')
     local f = hdf5.open(opt.data_folder .. 'params.hdf5', 'r')
@@ -266,10 +277,15 @@ function main()
     train(model, crit)--, tr_data, val_data)
     collectgarbage()
 
-   -- evaluate
-    test_acc = evaluate(model, "te")
+    -- evaluate
+    if opt.predfile ~= nil then
+        pred_fh = io.open(opt.predfile, "w")
+        pred_fh:write("Prediction, Target\n")
+    end
+    test_acc = evaluate(model, "te", pred_fh)
     log(file, "Test accuracy: " .. test_acc)
-    io.close(file)
+    pred_fh:close()
+    file:close()
 end
 
 main()

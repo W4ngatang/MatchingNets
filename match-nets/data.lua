@@ -1,4 +1,3 @@
-
 package.path = package.path .. ";" .. os.getenv("HOME") .. 
     "/MatchingNets/match-nets/?.lua" .. ";" .. os.getenv("HOME")
     .. "/MatchingNets/debugger.lua/?.lua"
@@ -67,7 +66,6 @@ function data.__index(self,idx)
     end
 end
 
--- actually don't need to call this because on shuffling perm is set to random
 function data.shuffle()
-    self.perm = torch.randperm(self.n_batches):long()--type('torch.LongTensor')
+    self.perm = torch.randperm(self.n_batches):long()
 end
