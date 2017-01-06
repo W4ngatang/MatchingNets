@@ -68,6 +68,8 @@ cmd:option('--beta2', .999, 'Adam beta2 parameter')
 cmd:option('--batch_size', 1, 'number of episodes per batch')
 cmd:option('--max_grad_norm', 0, 'maximum gradient value')
 
+cmd:option('--debug', 0, '1 if stop for debug after 20 epochs')
+
 function log(file, msg)
     print(msg)
     file:write(msg .. "\n")
@@ -185,9 +187,11 @@ function train(model, crit)
         end
         log(file, "\tTraining time: " .. timer:time().real .. " seconds")
         timer:reset()
-        if epoch > 20 then
+        
+        if epoch > 20 then -- arbitrary point for debugging
             flag = 1
         end
+
         val_score = evaluate(model, "val")
         log(file, "\tValidation time " .. timer:time().real .. " seconds")
         if opt.learning_rate_decay > 0 and opt.optimizer == 'adagrad' and val_score < last_score then
@@ -232,8 +236,8 @@ function evaluate(model, split, fh)
             n_correct = n_correct + torch.sum(torch.eq(preds, targs))
             n_preds = n_preds + targs:nElement()
             
-            if flag == 1 then
-                dbg()
+            if flag == 1 and opt.debug then
+                --dbg()
             end
 
             if fh ~= nil then

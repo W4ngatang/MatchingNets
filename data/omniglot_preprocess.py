@@ -15,7 +15,7 @@ Rounding to 0 or 1 based on a threshold seems ok
 Threshold arbitrarily chosen as .5
 
 '''
-def load_image(args, f):
+def load_image(f):
     im = imread(f, flatten=True)
     if args.resize > 0:
         im = np.asarray(imresize(im, size=(args.resize, args.resize)))
@@ -46,7 +46,7 @@ def load_data(path, split=1):
         n_classes = 0
         for alphabet in alphabets:
             n_classes += len(os.listdir(path + '/' + alphabet))
-        data = np.zeros((n_classes*n_ex_per_class, args.im_dim, args.im_dim))
+        data = np.zeros((n_classes, n_ex_per_class, args.im_dim, args.im_dim))
         print '\t%d classes to load' % n_classes
         
         count = 0
@@ -55,11 +55,10 @@ def load_data(path, split=1):
             for char in os.listdir(alpha_path):
                 char_path = alpha_path + '/' + char
                 char_idx = int(os.listdir(char_path)[0].split('.')[0].split('_')[0]) - 1
-                char_offset = count * n_ex_per_class # offset for the class in the array
                 for im in os.listdir(char_path):
                     # for each character, get the numbering and place in the appropriate spot
-                    ex_idx = char_offset + int(im.split('.')[0].split('_')[1]) - 1
-                    data[ex_idx,:,:] = load_image(char_path+'/'+im)
+                    ex_idx = int(im.split('.')[0].split('_')[1]) - 1
+                    data[count,ex_idx,:,:] = load_image(char_path+'/'+im)
                 count += 1
             if not (count % int(n_classes/10)):
                 print '\tFinished %d classes\n' % count
@@ -70,10 +69,11 @@ def load_data(path, split=1):
 def augment(data):
     try:
         n_data = data.shape[0]
-        augmented = np.zeros((n_data*4, args.im_dim, args.im_dim))
-        for i, datum in enumerate(data):
-            for j in xrange(4):
-                augmented[j*n_data+i, :, :] = np.rot90(datum, j)
+        augmented = np.zeros((n_data*4, n_ex_per_class, args.im_dim, args.im_dim))
+        for i, char in enumerate(data):
+            for j,ex in enumerate(char):
+                for k in xrange(4):
+                    augmented[k*n_data+i, j, :, :] = np.rot90(ex, k)
     except Exception as e:
         pdb.set_trace()
     return augmented
@@ -91,7 +91,7 @@ Data will be arranged as follows: n_episodes x (N * (k+kb)) x im_size x im_size
 def create_episodes(data, n_episodes):
     try:
         k, kB = args.k, args.kB
-        n_classes = data.shape[0] / n_ex_per_class
+        n_classes = data.shape[0] 
         n_examples = k + kB # n examples per class per episode
         base_bat_offset = args.N * k
         inputs = np.zeros((n_episodes, args.N * n_examples, args.im_dim, args.im_dim))
@@ -102,14 +102,13 @@ def create_episodes(data, n_episodes):
         for i in xrange(n_episodes):
             episode_classes = np.random.choice(n_classes, args.N, replace=False)
             for j,c in enumerate(episode_classes):
-                exs = np.random.choice(n_ex_per_class, n_examples, replace=False) + \
-                        (c * n_ex_per_class) # offset for the class
+                exs = np.random.choice(n_ex_per_class, n_examples, replace=False)
                 set_offset = j*k
                 bat_offset = base_bat_offset + j*kB
-                inputs[i,set_offset:set_offset+k,:,:] = data[exs[:k],:,:]
-                inputs[i,bat_offset:bat_offset+kB,:,:] = data[exs[k:],:,:]
+                inputs[i,set_offset:set_offset+k,:,:] = data[c, exs[:k],:,:]
+                inputs[i,bat_offset:bat_offset+kB,:,:] = data[c, exs[k:],:,:]
                 outputs[i,set_offset:set_offset+k,:] = np.ones((k,1)) * c
-                outputs[i,bat_offset:bat_offset+kB,:] = np.ones((kB,1))*c
+                outputs[i,bat_offset:bat_offset+kB,:] = np.ones((kB,1)) * c
     except Exception as e:
         pdb.set_trace()
     return inputs, outputs
@@ -142,7 +141,8 @@ def main(arguments):
     parser.add_argument('--n_tr_episodes', help='number of tr episodes per shard', type=int, default=10000) # about 70s / 10k
     parser.add_argument('--n_val_episodes', help='number of val episodes per shard', type=int, default=10000)
     parser.add_argument('--n_te_episodes', help='number of te episodes per shard', type=int, default=10000)
-    parser.add_argument('--splits', help='string containing fractions for train, validation, test sets respectively, e.g. .8,.1,.1', type=str, default='.76,.12,.12')
+    parser.add_argument('--n_tr_classes', help='number of classes (before augmentation) for training, \
+            remaining classes are split evenly among validation and test', type=int, default=1200)
     
     parser.add_argument('--im_dim', help='dim of image along a side', type=int, default=28)
     parser.add_argument('--thresh', help='threshold (in (0,1)) for image binarization, 0 for none', type=float, default=0.)
@@ -157,14 +157,14 @@ def main(arguments):
         data = f['data'][:]
         n_classes =  f['n_classes'][:][0]
         f.close()
-        args.im_dim = data.shape[1]
+        args.im_dim = data.shape[-1]
     else:
         print '\tReading data from images'
         bg_data, n_bg_classes  = load_data(args.data_path + '/' + 'images_background')
         eval_data, n_eval_classes = load_data(args.data_path + '/' + 'images_evaluation')
 
         n_classes = n_bg_classes + n_eval_classes
-        data = np.zeros((bg_data.shape[0]+eval_data.shape[0], args.im_dim, args.im_dim))
+        data = np.zeros((bg_data.shape[0]+eval_data.shape[0], n_ex_per_class, args.im_dim, args.im_dim))
         data[:bg_data.shape[0]] = bg_data
         data[bg_data.shape[0]:] = eval_data
 
@@ -174,12 +174,13 @@ def main(arguments):
                 f['n_classes'] = np.array([n_classes], dtype=np.int32)
         print '\tSaved loaded data to %s' % args.save_data_to
 
-    break_pts = [(n_ex_per_class) * int(n_classes * float(x)) for x in args.splits.split(',')]
-    tr_data = data[:break_pts[0]]
-    val_data = data[break_pts[0]:break_pts[0]+break_pts[1]]
-    te_data = data[break_pts[0]+break_pts[1]:]
+    np.random.shuffle(data)
+    split_pt = args.n_tr_classes + (n_classes - args.n_tr_classes)/2
+    tr_data = data[:args.n_tr_classes]
+    val_data = data[args.n_tr_classes:split_pt]
+    te_data = data[split_pt:]
     print '\tData loaded!'
-    print '\tSplit sizes: %d, %d, %d' % (tr_data.shape[0]/(n_ex_per_class), val_data.shape[0]/(n_ex_per_class), te_data.shape[0]/(n_ex_per_class))
+    print '\tSplit sizes: %d, %d, %d' % (tr_data.shape[0], val_data.shape[0], te_data.shape[0])
 
     aug_tr_data = augment(tr_data)
 
