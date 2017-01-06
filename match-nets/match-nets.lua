@@ -59,7 +59,7 @@ function make_matching_net(opt)
     local rebatch = nn.Transpose({2,3})(nn.View(-1, opt.N*opt.kB, opt.N*opt.k)(attn_scores))
     local class_probs = nn.IndexAdd(1, opt.N)({rebatch, inputs[3]})
     local unbatch2 = nn.View(-1, opt.N)(nn.Transpose({2,3})(class_probs))
-    local log_probs = nn.Log2()(unbatch2)
+    local log_probs = nn.Log()(unbatch2)
     local outputs = {log_probs}
     local crit = nn.ClassNLLCriterion()
 
