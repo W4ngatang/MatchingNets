@@ -59,7 +59,7 @@ function make_matching_net(opt)
     local rebatch = nn.Transpose({2,3})(nn.View(-1, opt.N*opt.kB, opt.N*opt.k)(attn_scores))
     local class_probs = nn.IndexAdd(1, opt.N)({rebatch, inputs[3]})
     local unbatch2 = nn.View(-1, opt.N)(nn.Transpose({2,3})(class_probs))
-    local log_probs = nn.Log()(unbatch2)
+    local log_probs = nn.Log2()(unbatch2)
     local outputs = {log_probs}
     local crit = nn.ClassNLLCriterion()
 
@@ -95,12 +95,12 @@ function make_cnn_module(opt, n_input_feats)
 
     local output
     local input = nn.Identity()() -- double () denotes nngraph module
-    if opt.cudnn == 1 then
+    if opt.gpuid > 0 and opt.cudnn == 1 then
         -- 1 is the number of input channels since b&w
         -- conv height and width change every layer
         local conv_layer = cudnn.SpatialConvolution(n_input_feats, opt.n_kernels, 
             conv_w, conv_h, 1, 1, pad_w, pad_h)(input)
-        local norm_layer = nn.SpatialBatchNormalization(opt.n_kernels)(conv_layer)
+        local norm_layer = nn.SpatialBatchNormalization(opt.n_kernels, opt.bn_eps, opt.bn_momentum, opt.bn_affine)(conv_layer)
         local pool_layer = cudnn.SpatialMaxPooling(
             pool_w, pool_h, pool_w, pool_h, opt.pool_pad, opt.pool_pad)
         if opt.pool_ceil == 1 then
@@ -110,14 +110,13 @@ function make_cnn_module(opt, n_input_feats)
     else
         local conv_layer = nn.SpatialConvolution(n_input_feats, opt.n_kernels,
             conv_w, conv_h, 1, 1, pad_w, pad_h)(input)
-        local norm_layer = nn.SpatialBatchNormalization(opt.n_kernels)(conv_layer)
+        local norm_layer = nn.SpatialBatchNormalization(opt.n_kernels, opt.bn_eps, opt.bn_momentum, opt.bn_affine)(conv_layer)
         local pool_layer = nn.SpatialMaxPooling(
-            pool_w, pool_h, pool_w, pool_h, opt.pool_pad, opt.pool_pad)(
-            nn.ReLU()(norm_layer))
+            pool_w, pool_h, pool_w, pool_h, opt.pool_pad, opt.pool_pad)
         if opt.pool_ceil == 1 then
             pool_layer:ceil()
         end
-        output = pool_layer
+        output = pool_layer(nn.ReLU()(norm_layer))
     end
     return nn.gModule({input},{output})
 end

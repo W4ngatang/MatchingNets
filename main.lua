@@ -14,8 +14,12 @@ require 'match-nets'
 require 'MapTable'
 require 'IndexAdd'
 
+require 'Log2'
+
 require 'nngraph'
 require 'hdf5'
+
+flag = 0
 
 cmd = torch.CmdLine()
 cmd:text()
@@ -37,9 +41,9 @@ cmd:option('--print_freq', 5, 'how often to print training messages')
 cmd:option('--init_scale', .05, 'scale of initial parameters')
 cmd:option('--init_dist', 'uniform', 'distribution to draw  initial parameters')
 cmd:option('--share_embed', 0, '1 if share parameters between embedding functions')
-cmd:option('--match_fn', 'softmax', 'Function to score matches')
-cmd:option('--embed_fn', '', 'Function to embed inputs')
-cmd:option('--FCE', 0, '1 if use FCE, 0 otherwise')
+cmd:option('--bn_eps', 1e-3, 'epsilson constant for batch normalization')
+cmd:option('--bn_momentum', 0.1, 'momentum term in batch normalization')
+cmd:option('--bn_affine', true, 'affine parameters in batch normalization')
 
 -- CNN options --
 cmd:option('--n_modules', 4, 'number of convolutional units to stack')
@@ -61,7 +65,6 @@ cmd:option('--momentum', 0, 'momentum')
 cmd:option('--rho', .95, 'Adadelta interpolation parameter')
 cmd:option('--beta1', .9, 'Adam beta1 parameter')
 cmd:option('--beta2', .999, 'Adam beta2 parameter')
-cmd:option('--halve_learning_rate', 0, '1 if halve learning rate if val score decreases between successive epochs')
 cmd:option('--batch_size', 1, 'number of episodes per batch')
 cmd:option('--max_grad_norm', 0, 'maximum gradient value')
 
@@ -82,11 +85,17 @@ function train(model, crit)
     end
 
     --[[ Optimization ]]--
-    local inputs, targs, total_loss
+    local inputs, targs, total_loss, n_correct, n_preds, n_batches
     function feval(p)
         grad_params:zero()
         local outs = model:forward(inputs)
         local loss = crit:forward(outs, targs)
+        local maxes, preds = torch.max(outs, 2)
+        if opt.gpuid > 0 then
+            preds = preds:cuda()
+        end
+        n_correct = n_correct + torch.sum(torch.eq(preds, targs))
+        n_preds = n_preds + targs:nElement()
         total_loss = total_loss + loss
         local grad_loss = crit:backward(outs, targs)
         model:backward(inputs, grad_loss)
@@ -115,6 +124,7 @@ function train(model, crit)
         }
         optimize = optim.adagrad
         log(file, "\t\twith learning rate " .. opt.learning_rate)
+        log(file, "\t\twith learning rate decay " .. opt.learning_rate_decay)
     elseif opt.optimizer == 'adadelta' then
         optim_state = {
             rho = opt.rho,
@@ -140,9 +150,6 @@ function train(model, crit)
     if opt.max_grad_norm > 0 then
         log(file, "\t\twith max gradient norm: " .. opt.max_grad_norm)
     end
-    if opt.halve_learning_rate > 0 then
-        log(file, "\t\twith halving learning rate")
-    end
 
     --[[ Training Loop ]]--
     local timer = torch.Timer()
@@ -154,6 +161,9 @@ function train(model, crit)
         log(file, "Epoch " ..epoch)
         timer:reset()
         total_loss = 0
+        n_correct = 0
+        n_preds = 0
+        n_batches = 0
         for shard_n = 1, opt.n_tr_shards do
             local f = hdf5.open(opt.data_folder .. 'tr_' .. shard_n .. '.hdf5', 'r')
             local tr_ins = f:read('ins'):all()
@@ -167,6 +177,7 @@ function train(model, crit)
             if shard_n % (10/opt.print_freq) == 0 then
                 log(file, "\t  Completed " .. shard_n/opt.n_tr_shards*100 .. "% in " ..timer:time().real .. " seconds")
             end
+            n_batches = n_batches + tr_data.n_batches
             tr_ins = nil
             tr_outs = nil
             tr_data = nil
@@ -174,18 +185,21 @@ function train(model, crit)
         end
         log(file, "\tTraining time: " .. timer:time().real .. " seconds")
         timer:reset()
+        if epoch > 20 then
+            flag = 1
+        end
         val_score = evaluate(model, "val")
         log(file, "\tValidation time " .. timer:time().real .. " seconds")
-        if opt.halve_learning_rate > 0 and val_score < last_score then
-            optim_state['learningRate'] = optim_state['learningRate']/2
-            log(file, "\tLearning rate halved to " .. optim_state['learningRate'])
+        if opt.learning_rate_decay > 0 and opt.optimizer == 'adagrad' and val_score < last_score then
+            optim_state['learningRate'] = optim_state['learningRate'] * opt.learning_rate_decay
+            log(file, "\tLearning rate decayed to " .. optim_state['learningRate'])
         end
         if val_score > best_score then
             -- TODO: save the model
             best_score = val_score
         end
         last_score = val_score
-        log(file, "\tLoss: " .. total_loss .. ", Validation accuracy: " .. val_score .. ", Best accuracy: " .. best_score)
+        log(file, "\tLoss: " .. total_loss/n_batches .. ", training accuracy: " .. n_correct/n_preds .. ", Validation accuracy: " .. val_score .. ", Best accuracy: " .. best_score)
         --log(file, "\tValidation accuracy: " .. val_score)
         --log(file, "\tBest accuracy: " .. best_score)
     end
@@ -217,14 +231,19 @@ function evaluate(model, split, fh)
             end
             n_correct = n_correct + torch.sum(torch.eq(preds, targs))
             n_preds = n_preds + targs:nElement()
+            
+            if flag == 1 then
+                dbg()
+            end
+
             if fh ~= nil then
                 for j = 1, preds:nElement() do
                     fh:write(preds[j][1] .. ', ' .. targs[j] .. "\n")
                 end
             end
         end
-        ins = nil
-        outs = nil
+        sp_ins = nil
+        sp_outs = nil
         sp_data = nil
         collectgarbage()
     end
