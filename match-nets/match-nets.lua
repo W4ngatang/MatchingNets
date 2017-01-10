@@ -33,11 +33,15 @@ function make_matching_net(opt)
     --   -> normalize -> B*N*k x 64
     --   -> view -> B x N*k x 64
     -- out: B x N*k x 64
-    local g
+    local g = make_cnn(opt)
     if opt.share_embed == 1 then
-        g = f
+        g:share(f, 'weight')
+        g:share(f, 'bias')
+        g:share(f, 'gradWeight')
+        g:share(f, 'gradBias')
     else
-        g = make_cnn(opt)
+        --g = make_cnn(opt)
+        dbg()
     end
     local embed_g = nn.Squeeze()(g(nn.Unsqueeze(2)(inputs[2])))
     local norm_g = nn.Normalize(2)(embed_g)
@@ -92,6 +96,13 @@ function make_cnn_module(opt, n_input_feats)
     local pad_h = opt.conv_pad --math.floor((conv_h - 1) / 2)
     local pool_w = opt.pool_width
     local pool_h = opt.pool_height
+
+    local nonlinearity
+    if opt.nonlinearity == 'relu' then
+        nonlinearity = nn.ReLU()
+    elseif opt.nonlinearity == 'tanh' then
+        nonlinearity = nn.Tanh()
+    end
 
     local output
     local input = nn.Identity()() -- double () denotes nngraph module

@@ -18,6 +18,15 @@ require 'Log2'
 
 require 'nngraph'
 require 'hdf5'
+gModule = torch.getmetatable('nn.gModule')
+
+function gModule:share(toShare, ...)
+    for i, node in ipairs(self.forwardnodes) do
+        if node.data.module then
+            node.data.module:share(toShare.forwardnodes[i].data.module,...)
+        end
+    end
+end
 
 flag = 0
 
@@ -48,6 +57,7 @@ cmd:option('--bn_affine', true, 'affine parameters in batch normalization')
 -- CNN options --
 cmd:option('--n_modules', 4, 'number of convolutional units to stack')
 cmd:option('--n_kernels', 64, 'number of convolutional filters')
+cmd:option('--nonlinearity', 'relu', 'nonlinearity to use')
 cmd:option('--conv_width', 3, 'convolution filter width')
 cmd:option('--conv_height', 3, 'convolution filter height')
 cmd:option('--conv_pad', 1, 'convolutional padding')
@@ -69,6 +79,7 @@ cmd:option('--batch_size', 1, 'number of episodes per batch')
 cmd:option('--max_grad_norm', 0, 'maximum gradient value')
 
 cmd:option('--debug', 0, '1 if stop for debug after 20 epochs')
+cmd:option('--debug_after', 25, 'number of epochs after which to activate debugger')
 
 function log(file, msg)
     print(msg)
@@ -157,6 +168,7 @@ function train(model, crit)
     local timer = torch.Timer()
     local last_score = evaluate(model, "val")
     local best_score = last_score
+    local best_params = params:copy()
     log(file, "\tInitial validation accuracy: " .. last_score)
     for epoch = 1, opt.n_epochs do
         model:training()
@@ -188,7 +200,7 @@ function train(model, crit)
         log(file, "\tTraining time: " .. timer:time().real .. " seconds")
         timer:reset()
         
-        if epoch > 20 then -- arbitrary point for debugging
+        if epoch > opt.debug_after then -- point for debugging
             flag = 1
         end
 
@@ -201,12 +213,12 @@ function train(model, crit)
         if val_score > best_score then
             -- TODO: save the model
             best_score = val_score
+            best_params = params:clone()
         end
         last_score = val_score
         log(file, "\tLoss: " .. total_loss/n_batches .. ", training accuracy: " .. n_correct/n_preds .. ", Validation accuracy: " .. val_score .. ", Best accuracy: " .. best_score)
-        --log(file, "\tValidation accuracy: " .. val_score)
-        --log(file, "\tBest accuracy: " .. best_score)
     end
+    params = best_params
 end
 
 function evaluate(model, split, fh)
@@ -237,7 +249,7 @@ function evaluate(model, split, fh)
             n_preds = n_preds + targs:nElement()
             
             if flag == 1 and opt.debug then
-                --dbg()
+                dbg()
             end
 
             if fh ~= nil then
@@ -263,7 +275,6 @@ function main()
         require 'cutorch'
         require 'cunn'
         if opt.cudnn == 1 then
-            assert(opt.gpuid > 0, 'GPU must be used if using cudnn')
             log(file, "\tUsing cudnn...")
             require 'cudnn'
         end
@@ -297,7 +308,7 @@ function main()
 
     -- train
     log(file, 'Starting training...')
-    train(model, crit)--, tr_data, val_data)
+    train(model, crit)
     collectgarbage()
 
     -- evaluate
