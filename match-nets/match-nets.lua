@@ -39,9 +39,6 @@ function make_matching_net(opt)
         g:share(f, 'bias')
         g:share(f, 'gradWeight')
         g:share(f, 'gradBias')
-    else
-        --g = make_cnn(opt)
-        dbg()
     end
     local embed_g = nn.Squeeze()(g(nn.Unsqueeze(2)(inputs[2])))
     local norm_g = nn.Normalize(2)(embed_g)

@@ -168,7 +168,7 @@ function train(model, crit)
     local timer = torch.Timer()
     local last_score = evaluate(model, "val")
     local best_score = last_score
-    local best_params = params:copy()
+    local best_params = params:clone()
     log(file, "\tInitial validation accuracy: " .. last_score)
     for epoch = 1, opt.n_epochs do
         model:training()
@@ -248,7 +248,7 @@ function evaluate(model, split, fh)
             n_correct = n_correct + torch.sum(torch.eq(preds, targs))
             n_preds = n_preds + targs:nElement()
             
-            if flag == 1 and opt.debug then
+            if flag == 1 and opt.debug == 1 then
                 dbg()
             end
 

@@ -80,7 +80,7 @@ def augment(data):
 
 '''
 
-Data will be arranged as follows: n_episodes x (N * (k+kb)) x im_size x im_size
+Data will be arranged as follows: n_episodes x (N*k + kb) x im_size x im_size
 
 [ episode 1 ] -->   [ S ] total ((k + kb), im_size, im_size)
 [ episode 2 ]       [ B ]   or ((k + kb), 1) for labels
@@ -88,39 +88,62 @@ Data will be arranged as follows: n_episodes x (N * (k+kb)) x im_size x im_size
 [ episode N ]
 
 '''
-def create_episodes(data, n_episodes):
+def create_oneshot_episodes(data, n_episodes):
     try:
         k, kB = args.k, args.kB
         n_classes = data.shape[0] 
-        n_examples = k + kB # n examples per class per episode
         base_bat_offset = args.N * k
-        inputs = np.zeros((n_episodes, args.N * n_examples, args.im_dim, args.im_dim))
-        outputs = np.zeros((n_episodes, args.N * n_examples, 1))
+        inputs = np.zeros((n_episodes, (args.N*k)+kB, args.im_dim, args.im_dim))
+        outputs = np.zeros((n_episodes, (args.N*k)+kB, 1))
 
         # for each episode, sample N classes
         # then for each class sample k+kB examples
         for i in xrange(n_episodes):
             episode_classes = np.random.choice(n_classes, args.N, replace=False)
-            for j,c in enumerate(episode_classes):
-                exs = np.random.choice(n_ex_per_class, n_examples, replace=False)
+            batch_examples = np.random.multinomial(kB, [1./args.N]*args.N)
+            batch_offset = 0
+            for j,(c,n) in enumerate(zip(episode_classes, batch_examples)):
+                exs = np.random.choice(n_ex_per_class, k+n, replace=False)
                 set_offset = j*k
-                bat_offset = base_bat_offset + j*kB
+                bat_offset = base_bat_offset + batch_offset
                 inputs[i,set_offset:set_offset+k,:,:] = data[c, exs[:k],:,:]
-                inputs[i,bat_offset:bat_offset+kB,:,:] = data[c, exs[k:],:,:]
-                outputs[i,set_offset:set_offset+k,:] = np.ones((k,1)) * c
-                outputs[i,bat_offset:bat_offset+kB,:] = np.ones((kB,1)) * c
+                inputs[i,bat_offset:bat_offset+n,:,:] = data[c, exs[k:],:,:]
+                outputs[i,set_offset:set_offset+k,:] = np.ones((k,1)) * j
+                outputs[i,bat_offset:bat_offset+n,:] = np.ones((n,1)) * j
+                batch_offset += n
+    except Exception as e:
+        pdb.set_trace()
+    return inputs, outputs
+
+def create_baseline_episodes(data):
+    try:
+        inputs = np.zeros((data.shape[0]*n_ex_per_class, args.im_dim, args.im_dim))
+        outputs = np.zeros((data.shape[0]*n_ex_per_class, 1))
+        for j, char in enumerate(data):
+            inputs[j*n_ex_per_class:(j+1)*n_ex_per_class, :, :] = char
+            outputs[j*n_ex_per_class:(j+1)*n_ex_per_class, :] = np.ones((n_ex_per_class, 1)) * j
     except Exception as e:
         pdb.set_trace()
     return inputs, outputs
 
 def create_shards(data, n_episodes, n_shards, split):
-    for i in xrange(n_shards):
-        with h5py.File(args.out_path + split + "_%d.hdf5" % (i+1), 'w') as f:
-            ins, outs = create_episodes(data, n_episodes)
-            f['ins'] = ins
-            f['outs'] = outs
-        del ins, outs
-        print '\t%d..' % (i+1)
+    if args.type == 'oneshot' or split != "tr":
+        for i in xrange(n_shards):
+            with h5py.File(args.out_path + split + "_%d.hdf5" % (i+1), 'w') as f:
+                ins, outs = create_oneshot_episodes(data, n_episodes)
+                f['ins'] = ins
+                f['outs'] = outs
+            del ins, outs
+            print '\t%d..' % (i+1)
+    assert(args.type == 'baseline' and split == "tr")
+    with h5py.File(args.out_path + split + "_%d.hdf5" % 1, 'w') as f:
+        ins, outs = create_baseline_episodes(data)
+        f['ins'] = ins
+        f['outs'] = outs
+    del ins, outs
+    print '\t%d..' % (i+1)
+
+
 
 def main(arguments):
     global args
@@ -131,13 +154,15 @@ def main(arguments):
     parser.add_argument('--load_data_from', help='optional path to hdf5 file containing loaded data', type=str, default='')
     parser.add_argument('--save_data_to', help='optional path to save hdf5 file containing loaded data', type=str, default='')
     parser.add_argument('--out_path', help='path to folder to contain output files', type=str, default='')
+
+    parser.add_argument('--type', help='type of classifier data will train (oneshot or baseline)', type=str, default='oneshot')
     parser.add_argument('--n_tr_shards', help='number of shards to split tr data amongst', type=int, default=1)
     parser.add_argument('--n_val_shards', help='number of shards to split val data amongst', type=int, default=1)
     parser.add_argument('--n_te_shards', help='number of shards to split te data amongst', type=int, default=1)
 
     parser.add_argument('--N', help='number of unique classes per episode', type=int, default=5)
     parser.add_argument('--k', help='number of examples per class in the support set', type=int, default=1)
-    parser.add_argument('--kB', help='number of examples per class in the batch', type=int, default=1) # note: this may not be what they do in paper
+    parser.add_argument('--kB', help='number of examples per class in the batch', type=int, default=10) 
     parser.add_argument('--n_tr_episodes', help='number of tr episodes per shard', type=int, default=10000) # about 70s / 10k
     parser.add_argument('--n_val_episodes', help='number of val episodes per shard', type=int, default=10000)
     parser.add_argument('--n_te_episodes', help='number of te episodes per shard', type=int, default=10000)
