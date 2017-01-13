@@ -10,28 +10,28 @@ local dbg = require 'debugger'
 function make_matching_net(opt)
     -- input is support set and labels, test datum
     local inputs = {}
-    table.insert(inputs, nn.Identity()()) -- hat(x): B*N*kb x im x im
+    table.insert(inputs, nn.Identity()()) -- hat(x): B*kb x im x im
     table.insert(inputs, nn.Identity()()) -- x_i: B*N*k x im x im
     table.insert(inputs, nn.Identity()()) -- y_i: B x N*k
 
-    -- in: B*N*kB x im x im
-    --   -> unsqueeze -> B*N*kB x 1 x im x im
-    --   -> f -> B*N*kB x 64 x 1 x 1
-    --   -> squeeze -> B*N*kB x 64
-    --   -> normalize -> B*N*kB x 64
-    --   -> reshape -> B x N*kB x 64
-    -- out: B x N*kB x 64
+    -- in: B*kB x im x im
+    --   unsqueeze -> B*kB x 1 x im x im
+    --   f -> B*kB x 64 x 1 x 1
+    --   squeeze -> B*kB x 64
+    --   normalize -> B*kB x 64
+    --   reshape -> B x kB x 64
+    -- out: B x kB x 64
     local f = make_cnn(opt)
     local embed_f = nn.Squeeze()(f(nn.Unsqueeze(2)(inputs[1])))
     local norm_f = nn.Normalize(2)(embed_f)
-    local batch_f = nn.View(-1, opt.N*opt.kB, opt.n_kernels)(norm_f)
+    local batch_f = nn.View(-1, opt.kB, opt.n_kernels)(norm_f)
 
     -- in: B*N*k x im x im
-    --   -> unsqueeze -> B*N*k x 1 x im x im
-    --   -> g -> B*N*k x 64 x 1 x 1
-    --   -> squeeze -> B*N*k x 64
-    --   -> normalize -> B*N*k x 64
-    --   -> view -> B x N*k x 64
+    --   unsqueeze -> B*N*k x 1 x im x im
+    --   g -> B*N*k x 64 x 1 x 1
+    --   squeeze -> B*N*k x 64
+    --   normalize -> B*N*k x 64
+    --   view -> B x N*k x 64
     -- out: B x N*k x 64
     local g = make_cnn(opt)
     if opt.share_embed == 1 then
@@ -44,20 +44,20 @@ function make_matching_net(opt)
     local norm_g = nn.Normalize(2)(embed_g)
     local batch_g = nn.View(-1, opt.N*opt.k, opt.n_kernels)(norm_g)
     
-    -- in: (B x N*kB x 64) , (B x N*k x 64)
-    --   -> MM: -> B x N*k x N*kB
-    --   -> Transpose: B x N*kB x N*k
-    --   -> View -> (B * N*kB) x N*k
-    --   -> SoftMax -> (B * N*kB) x N*k
-    --   -> View -> B x N*kB x N*k
-    --   -> Transpose -> B x N*k x N*kB
-    --   -> IndexAdd -> B x N x N*kb
-    --   -> Transpose -> B x N*kB x N
-    --   -> View -> B*N*kB x N
+    -- in: (B x kB x 64) , (B x N*k x 64)
+    --   -> MM: -> B x N*k x kB
+    --   -> Transpose: B x kB x N*k
+    --   -> View -> (B * kB) x N*k
+    --   -> SoftMax -> (B * kB) x N*k
+    --   -> View -> B x kB x N*k
+    --   -> Transpose -> B x N*k x kB
+    --   -> IndexAdd -> B x N x kB
+    --   -> Transpose -> B x kB x N
+    --   -> View -> B*kB x N
     local cos_dist = nn.MM(false, true)({batch_g, batch_f})
     local unbatch1 = nn.View(-1, opt.N*opt.k)(nn.Transpose({2,3})(cos_dist))
     local attn_scores = nn.SoftMax()(unbatch1)
-    local rebatch = nn.Transpose({2,3})(nn.View(-1, opt.N*opt.kB, opt.N*opt.k)(attn_scores))
+    local rebatch = nn.Transpose({2,3})(nn.View(-1, opt.kB, opt.N*opt.k)(attn_scores))
     local class_probs = nn.IndexAdd(1, opt.N)({rebatch, inputs[3]})
     local unbatch2 = nn.View(-1, opt.N)(nn.Transpose({2,3})(class_probs))
     local log_probs = nn.Log()(unbatch2)
@@ -65,7 +65,33 @@ function make_matching_net(opt)
     local crit = nn.ClassNLLCriterion()
 
     return nn.gModule(inputs, outputs), crit
+end
 
+function make_baseline(opt)
+    -- input is support set and labels, test datum
+    local inputs = {}
+    table.insert(inputs, nn.Identity()()) -- hat(x): B x im x im
+
+    -- in: B x im x im
+    --   unsqueeze -> B x 1 x im x im
+    --   f -> B x 64 x 1 x 1
+    --   squeeze -> B x 64
+    --   linear -> B x n_classes
+    --   LSM -> B x n_classes
+    -- out: B x n_classes
+    local f = make_cnn(opt)
+    local embed_f = nn.Squeeze()(f(nn.Unsqueeze(2)(inputs[1])))
+    local linear = nn.Linear(opt.n_kernels, n_classes)(embed_f)
+    local outputs = {linear}
+    local crit = nn.CrossEntropyCriterion()
+
+    return nn.gModule(inputs, outputs), crit
+end
+
+function make_baseline_nearest_neighbor(opt, embed)
+    local inputs = {}
+    table.insert(inputs, nn.Identity()())
+    
 end
 
 function make_cnn(opt)

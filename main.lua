@@ -47,6 +47,7 @@ cmd:option('--predfile', '', 'file to print test predictions to')
 cmd:option('--print_freq', 5, 'how often to print training messages')
 
 -- Model options --
+cmd:option('--model', 'matching-net', 'model to use (matching-net or baseline')
 cmd:option('--init_scale', .05, 'scale of initial parameters')
 cmd:option('--init_dist', 'uniform', 'distribution to draw  initial parameters')
 cmd:option('--share_embed', 0, '1 if share parameters between embedding functions')
@@ -213,12 +214,12 @@ function train(model, crit)
         if val_score > best_score then
             -- TODO: save the model
             best_score = val_score
-            best_params = params:clone()
+            best_params:copy(params)
         end
         last_score = val_score
         log(file, "\tLoss: " .. total_loss/n_batches .. ", training accuracy: " .. n_correct/n_preds .. ", Validation accuracy: " .. val_score .. ", Best accuracy: " .. best_score)
     end
-    params = best_params
+    params:copy(best_params)
 end
 
 function evaluate(model, split, fh)

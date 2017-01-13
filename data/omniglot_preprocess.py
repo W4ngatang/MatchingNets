@@ -108,8 +108,8 @@ def create_oneshot_episodes(data, n_episodes):
                 bat_offset = base_bat_offset + batch_offset
                 inputs[i,set_offset:set_offset+k,:,:] = data[c, exs[:k],:,:]
                 inputs[i,bat_offset:bat_offset+n,:,:] = data[c, exs[k:],:,:]
-                outputs[i,set_offset:set_offset+k,:] = np.ones((k,1)) * j
-                outputs[i,bat_offset:bat_offset+n,:] = np.ones((n,1)) * j
+                outputs[i,set_offset:set_offset+k,:] = np.ones((k,1)) * (j+1)
+                outputs[i,bat_offset:bat_offset+n,:] = np.ones((n,1)) * (j+1)
                 batch_offset += n
     except Exception as e:
         pdb.set_trace()
@@ -121,7 +121,7 @@ def create_baseline_episodes(data):
         outputs = np.zeros((data.shape[0]*n_ex_per_class, 1))
         for j, char in enumerate(data):
             inputs[j*n_ex_per_class:(j+1)*n_ex_per_class, :, :] = char
-            outputs[j*n_ex_per_class:(j+1)*n_ex_per_class, :] = np.ones((n_ex_per_class, 1)) * j
+            outputs[j*n_ex_per_class:(j+1)*n_ex_per_class, :] = np.ones((n_ex_per_class, 1)) * (j+1)
     except Exception as e:
         pdb.set_trace()
     return inputs, outputs
@@ -135,15 +135,15 @@ def create_shards(data, n_episodes, n_shards, split):
                 f['outs'] = outs
             del ins, outs
             print '\t%d..' % (i+1)
-    assert(args.type == 'baseline' and split == "tr")
-    with h5py.File(args.out_path + split + "_%d.hdf5" % 1, 'w') as f:
-        ins, outs = create_baseline_episodes(data)
-        f['ins'] = ins
-        f['outs'] = outs
-    del ins, outs
-    print '\t%d..' % (i+1)
-
-
+    else:
+        assert(args.type == 'baseline' and split == "tr")
+        with h5py.File(args.out_path + split + "_%d.hdf5" % 1, 'w') as f:
+            ins, outs = create_baseline_episodes(data)
+            f['ins'] = ins
+            f['outs'] = outs
+            f['n_classes'] = data.shape[0]
+        del ins, outs
+        print '\t%d..' % 1
 
 def main(arguments):
     global args
