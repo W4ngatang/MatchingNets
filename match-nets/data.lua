@@ -16,14 +16,6 @@ function data:__init(opt, datasets)
     self.n_episodes = self.xs:size(1)
     self.n_batches = self.n_episodes / self.batch_size
     self.perm = torch.range(1, self.n_batches):long()
-
-    --[[
-    local inds = torch.range(1, self.N):reshape(self.N, 1):long()
-    local set_ys = inds:repeatTensor(1,self.k):view(-1) -- format into [1 1 1 .. 2 2 2 ... N N N]
-    local bat_ys = inds:repeatTensor(1,self.kB):view(-1)
-    self.set_ys = set_ys
-    self.bat_ys = bat_ys
-    --]]
 end
 
 function data.__index(self,idx)

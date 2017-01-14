@@ -141,7 +141,6 @@ def create_shards(data, n_episodes, n_shards, split):
             ins, outs = create_baseline_episodes(data)
             f['ins'] = ins
             f['outs'] = outs
-            f['n_classes'] = data.shape[0]
         del ins, outs
         print '\t%d..' % 1
 
@@ -226,6 +225,7 @@ def main(arguments):
         f['n_tr_shards'] = np.array([args.n_tr_shards], dtype=np.int32)
         f['n_val_shards'] = np.array([args.n_val_shards], dtype=np.int32)
         f['n_te_shards'] = np.array([args.n_te_shards], dtype=np.int32)
+        f['n_classes'] = np.array([aug_tr_data.shape[0]], dtype=np.int32)
     print 'Done!'
 
 if __name__ == '__main__':
