@@ -3,9 +3,9 @@ package.path = package.path .. ";" .. os.getenv("HOME") ..
     .. "/MatchingNets/debugger.lua/?.lua"
 local dbg = require 'debugger'
 
-local data = torch.class("data")
+local Data = torch.class("Data")
 
-function data:__init(opt, datasets)
+function Data:__init(opt, datasets)
     self.gpuid = opt.gpuid
     self.xs = datasets[1]
     self.ys = datasets[2]:long()
@@ -18,10 +18,10 @@ function data:__init(opt, datasets)
     self.perm = torch.range(1, self.n_batches):long()
 end
 
-function data.__index(self,idx)
+function Data.__index(self,idx)
     local input, targ
     if type(idx) == "string" then
-        return data[idx]
+        return Data[idx]
     else
         if idx > self.n_batches then
             return "Error: invalid batch size"
@@ -61,6 +61,6 @@ function data.__index(self,idx)
     end
 end
 
-function data.shuffle()
+function Data.shuffle()
     self.perm = torch.randperm(self.n_batches):long()
 end

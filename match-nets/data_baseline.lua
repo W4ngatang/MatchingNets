@@ -28,13 +28,13 @@ function DataBaseline:__init(opt, datasets)
         self.batch_inputs = self.batch_inputs:cuda()
         self.batch_outputs = self.batch_outputs:cuda()
     end
-    self.perm = torch.range(1, self.n_batches)
+    self.perm = torch.randperm(self.n_batches)
 end
 
 function DataBaseline.__index(self,idx)
     local input, targ
     if type(idx) == "string" then
-        return data_baseline[idx]
+        return DataBaseline[idx]
     else
         if idx > self.n_batches then
             return "Error: invalid batch size"

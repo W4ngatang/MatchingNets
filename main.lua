@@ -17,7 +17,6 @@ require 'baseline'
 require 'IndexAdd'
 
 require 'Log2'
-flag = 0
 
 require 'nngraph'
 require 'hdf5'
@@ -74,6 +73,7 @@ cmd:option('--optimizer', 'adagrad', 'optimizer to use (from optim)')
 cmd:option('--learning_rate', .001, 'initial learning rate')
 cmd:option('--learning_rate_decay', .00, 'learning rate decay')
 cmd:option('--momentum', 0, 'momentum')
+cmd:option('--weight_decay', 0, 'weight decay')
 cmd:option('--rho', .95, 'Adadelta interpolation parameter')
 cmd:option('--beta1', .9, 'Adam beta1 parameter')
 cmd:option('--beta2', .999, 'Adam beta2 parameter')

@@ -7,6 +7,8 @@ import h5py
 import pdb
 
 n_ex_per_class = 20
+counter = 0
+total = 0
 
 '''
 
@@ -16,14 +18,21 @@ Threshold arbitrarily chosen as .5
 
 '''
 def load_image(f):
+    global counter, total
     im = imread(f, flatten=True)
     if args.resize > 0:
-        im = np.asarray(imresize(im, size=(args.resize, args.resize)))
-    im /= 255.
+        im = np.asarray(imresize(im, size=(args.resize, args.resize)), dtype=np.float32) / 255.
+    inverted = 1. - im
+    max_val = np.max(inverted)
+    if max_val > 0.:
+        inverted /= max_val
+        if max_val < 1.:
+            counter += 1
     if args.thresh > 0:
-        return (im / thresh).astype(int)
+        return (inverted / thresh).astype(int)
     else:
-        return im
+        total += 1
+        return inverted
 
 '''
 
@@ -39,6 +48,7 @@ Data returned is in format
 
 '''
 def load_data(path, split=1):
+    global counter, total
     try:
         # compute the number of character classes (should be 1623)
         # to preallocate an array to fill
@@ -62,6 +72,8 @@ def load_data(path, split=1):
                 count += 1
             if not (count % int(n_classes/10)):
                 print '\tFinished %d classes\n' % count
+
+        print 'Renormalized %d of %d classes' % (counter, total)
     except Exception as e:
         pdb.set_trace()
     return data, n_classes
@@ -122,9 +134,10 @@ def create_baseline_episodes(data):
         for j, char in enumerate(data):
             inputs[j*n_ex_per_class:(j+1)*n_ex_per_class, :, :] = char
             outputs[j*n_ex_per_class:(j+1)*n_ex_per_class, :] = np.ones((n_ex_per_class, 1)) * (j+1)
+        p = np.random.permutation(inputs.shape[0]) 
     except Exception as e:
         pdb.set_trace()
-    return inputs, outputs
+    return inputs[p], outputs[p]
 
 def create_shards(data, n_episodes, n_shards, split):
     if args.type == 'oneshot' or split != "tr":
@@ -158,19 +171,21 @@ def main(arguments):
     parser.add_argument('--n_tr_shards', help='number of shards to split tr data amongst', type=int, default=1)
     parser.add_argument('--n_val_shards', help='number of shards to split val data amongst', type=int, default=1)
     parser.add_argument('--n_te_shards', help='number of shards to split te data amongst', type=int, default=1)
+    parser.add_argument('--augment', help='1 if augment with rotations', type=int, default=1)
+    parser.add_argument('--reuse_test', help='1 if resue test classes for validation', type=int, default=1)
 
     parser.add_argument('--N', help='number of unique classes per episode', type=int, default=5)
     parser.add_argument('--k', help='number of examples per class in the support set', type=int, default=1)
     parser.add_argument('--kB', help='number of examples per class in the batch', type=int, default=10) 
-    parser.add_argument('--n_tr_episodes', help='number of tr episodes per shard', type=int, default=10000) # about 70s / 10k
-    parser.add_argument('--n_val_episodes', help='number of val episodes per shard', type=int, default=10000)
-    parser.add_argument('--n_te_episodes', help='number of te episodes per shard', type=int, default=10000)
+    parser.add_argument('--n_tr_episodes', help='number of tr episodes per shard', type=int, default=5000) # about 70s / 10k
+    parser.add_argument('--n_val_episodes', help='number of val episodes per shard', type=int, default=500)
+    parser.add_argument('--n_te_episodes', help='number of te episodes per shard', type=int, default=500)
     parser.add_argument('--n_tr_classes', help='number of classes (before augmentation) for training, \
             remaining classes are split evenly among validation and test', type=int, default=1200)
     
     parser.add_argument('--im_dim', help='dim of image along a side', type=int, default=28)
     parser.add_argument('--thresh', help='threshold (in (0,1)) for image binarization, 0 for none', type=float, default=0.)
-    parser.add_argument('--resize', help='dimension (along a side) to resize to, 0 for none', type=int, default=28)
+    parser.add_argument('--resize', help='dimension (along a side) to resize to, 0 for none', type=int, default=0)
     args = parser.parse_args(arguments)
     
     # load all the examples for every class
@@ -188,7 +203,7 @@ def main(arguments):
         eval_data, n_eval_classes = load_data(args.data_path + '/' + 'images_evaluation')
 
         n_classes = n_bg_classes + n_eval_classes
-        data = np.zeros((bg_data.shape[0]+eval_data.shape[0], n_ex_per_class, args.im_dim, args.im_dim))
+        data = np.zeros((bg_data.shape[0]+eval_data.shape[0], n_ex_per_class, bg_data.shape[2], bg_data.shape[3]))
         data[:bg_data.shape[0]] = bg_data
         data[bg_data.shape[0]:] = eval_data
 
@@ -198,21 +213,30 @@ def main(arguments):
                 f['n_classes'] = np.array([n_classes], dtype=np.int32)
         print '\tSaved loaded data to %s' % args.save_data_to
 
+    #data -= .5
+    #data -= np.mean(data, axis=(0,1))
+    #data /= np.std(data, axis=(0,1))
+
     np.random.shuffle(data)
-    split_pt = args.n_tr_classes + (n_classes - args.n_tr_classes)/2
-    tr_data = data[:args.n_tr_classes]
-    val_data = data[args.n_tr_classes:split_pt]
-    te_data = data[split_pt:]
+    if not args.reuse_test:
+        split_pt = args.n_tr_classes + (n_classes - args.n_tr_classes)/2
+        tr_data = data[:args.n_tr_classes]
+        val_data = data[args.n_tr_classes:split_pt]
+        te_data = data[split_pt:]
+    else:
+        tr_data = data[:args.n_tr_classes]
+        val_data = te_data = data[args.n_tr_classes:]
     print '\tData loaded!'
     print '\tSplit sizes: %d, %d, %d' % (tr_data.shape[0], val_data.shape[0], te_data.shape[0])
 
-    aug_tr_data = augment(tr_data)
+    if args.augment:
+        tr_data = augment(tr_data)
 
     # create episodes
     if args.out_path and args.out_path[-1] != '/':
         args.out_path += '/'
     print 'Creating data...'
-    create_shards(aug_tr_data, args.n_tr_episodes, args.n_tr_shards, "tr")
+    create_shards(tr_data, args.n_tr_episodes, args.n_tr_shards, "tr")
     print '\tFinished training data'
     create_shards(val_data, args.n_val_episodes, args.n_val_shards, "val")
     print '\tFinished validation data'
@@ -225,7 +249,7 @@ def main(arguments):
         f['n_tr_shards'] = np.array([args.n_tr_shards], dtype=np.int32)
         f['n_val_shards'] = np.array([args.n_val_shards], dtype=np.int32)
         f['n_te_shards'] = np.array([args.n_te_shards], dtype=np.int32)
-        f['n_classes'] = np.array([aug_tr_data.shape[0]], dtype=np.int32)
+        f['n_classes'] = np.array([tr_data.shape[0]], dtype=np.int32)
     print 'Done!'
 
 if __name__ == '__main__':

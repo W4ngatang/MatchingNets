@@ -90,9 +90,9 @@ function Baseline:train()
         }
         optimize = optim.adam
         log(log_fh, "\t\twith learning rate " .. opt.learning_rate)
-        log(file, "\t\twith learning rate decay " .. opt.learning_rate_decay)
-        log(file, "\t\twith beta1 " .. opt.beta1)
-        log(file, "\t\twith beta2 " .. opt.beta2)
+        log(log_fh, "\t\twith learning rate decay " .. opt.learning_rate_decay)
+        log(log_fh, "\t\twith beta1 " .. opt.beta1)
+        log(log_fh, "\t\twith beta2 " .. opt.beta2)
     else
         error('Unknown optimizer!')
     end
@@ -147,7 +147,7 @@ function Baseline:train()
                 optimize(feval, params, optim_state)
             end
             if shard_n % (10/opt.print_freq) == 0 then
-                log(file, "\t  Completed " .. shard_n/opt.n_tr_shards*100 .. "% in " ..timer:time().real .. " seconds")
+                log(log_fh, "\t  Completed " .. shard_n/opt.n_tr_shards*100 .. "% in " ..timer:time().real .. " seconds")
             end
             n_batches = n_batches + tr_data.n_batches
             tr_ins = nil
@@ -185,6 +185,11 @@ function Baseline:evaluate(split, fh)
     local crit = self.crit
     local opt = self.opt
     local log_fh = self.log_fh
+
+    if opt.predfile ~= nil and split == 'te' then
+        pred_fh = io.open(opt.predfile,"w")
+        pred_fh:write("Prediction, Target\n")
+    end
 
     model:evaluate()
     local n_preds = 0
@@ -232,9 +237,9 @@ function Baseline:evaluate(split, fh)
                 dbg()
             end
 
-            if fh ~= nil then
+            if pred_fh ~= nil then
                 for j = 1, preds:nElement() do
-                    fh:write(preds[j][1] .. ', ' .. targs[j] .. "\n")
+                    pred_fh:write(preds[j] .. ', ' .. targs[j] .. "\n")
                 end
             end
         end

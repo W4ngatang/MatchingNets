@@ -47,16 +47,16 @@ function MatchingNetwork:__init(opt, log_fh)
     local norm_g = nn.Normalize(2)(embed_g)
     local batch_g = nn.View(-1, opt.N*opt.k, opt.n_kernels)(norm_g)
     
-    -- in: (B x kB x 64) , (B x N*k x 64)
-    --   -> MM: -> B x N*k x kB
-    --   -> Transpose: B x kB x N*k
-    --   -> View -> (B * kB) x N*k
-    --   -> SoftMax -> (B * kB) x N*k
-    --   -> View -> B x kB x N*k
-    --   -> Transpose -> B x N*k x kB
-    --   -> IndexAdd -> B x N x kB
-    --   -> Transpose -> B x kB x N
-    --   -> View -> B*kB x N
+    -- in (B x kB x 64) , (B x N*k x 64)
+    --   MM: -> B x N*k x kB
+    --   Transpose: B x kB x N*k
+    --   View -> (B * kB) x N*k
+    --   SoftMax -> (B * kB) x N*k
+    --   View -> B x kB x N*k
+    --   Transpose -> B x N*k x kB
+    --   IndexAdd -> B x N x kB
+    --   Transpose -> B x kB x N
+    --   View -> B*kB x N
     local cos_dist = nn.MM(false, true)({batch_g, batch_f})
     local unbatch1 = nn.View(-1, opt.N*opt.k)(nn.Transpose({2,3})(cos_dist))
     local attn_scores = nn.SoftMax()(unbatch1)
@@ -75,6 +75,7 @@ function MatchingNetwork:__init(opt, log_fh)
     self.crit = crit
     self.opt = opt
     self.log_fh = log_fh
+    self.flag = 0
 end
 
 function MatchingNetwork:train()
@@ -89,6 +90,7 @@ function MatchingNetwork:train()
         params:normal(0, opt.init_scale)
     elseif opt.init_dist == 'uniform' then
         params:uniform(-opt.init_scale, opt.init_scale)
+        --params = params + .01
     else
         log(log_fh, 'Unsupported distribution for initialization!')
         return
@@ -99,13 +101,14 @@ function MatchingNetwork:train()
     if opt.optimizer == 'sgd' then
         optim_state = { -- NB: Siamese paper used layerwise LR and momentum
             learningRate = opt.learning_rate,
-            weightDecay = 0,
+            weightDecay = opt.weight_decay,
             momentum = opt.momentum,
             learningRateDecay = opt.learning_rate_decay
         }
         optimize = optim.sgd
         log(log_fh, "\t\twith learning rate " .. opt.learning_rate)
         log(log_fh, "\t\twith learning rate decay " .. opt.learning_rate_decay)
+        log(log_fh, "\t\twith weight decay" .. opt.weight_decay)
         log(log_fh, "\t\twith momentum " .. opt.momentum)
     elseif opt.optimizer == 'adagrad' then
         optim_state = {
@@ -180,7 +183,7 @@ function MatchingNetwork:train()
             local f = hdf5.open(opt.data_folder .. 'tr_' .. shard_n .. '.hdf5', 'r')
             local tr_ins = f:read('ins'):all()
             local tr_outs = f:read('outs'):all()
-            local tr_data = data(opt, {tr_ins, tr_outs})
+            local tr_data = Data(opt, {tr_ins, tr_outs})
             for i = 1, tr_data.n_batches do
                 local episode = tr_data[i]
                 inputs, targs = episode[1], episode[2]
@@ -196,15 +199,18 @@ function MatchingNetwork:train()
             collectgarbage()
         end
         log(log_fh, "\tTraining time: " .. timer:time().real .. " seconds")
-        timer:reset()
-        
-        if epoch > opt.debug_after then -- point for debugging
+
+        if epoch >= opt.debug_after and opt.debg == 1 then
             flag = 1
         end
+        if opt.debug == 1 and flag == 1 then
+            dbg()
+        end
 
+        timer:reset()
         val_score = self:evaluate("val")
         log(log_fh, "\tValidation time " .. timer:time().real .. " seconds")
-        if opt.learning_rate_decay > 0 and opt.optimizer == 'adagrad' and val_score < last_score then
+        if opt.learning_rate_decay > 0 and opt.optimizer == 'adagrad' and val_score <= last_score then
             optim_state['learningRate'] = optim_state['learningRate'] * opt.learning_rate_decay
             log(log_fh, "\tLearning rate decayed to " .. optim_state['learningRate'])
         end
@@ -225,7 +231,7 @@ function MatchingNetwork:evaluate(split)
     local opt = self.opt
     local log_fh = self.log_fh
 
-    if opt.predfile ~= nil and splits == 'te' then
+    if opt.predfile ~= nil and split == 'te' then
         pred_fh = io.open(opt.predfile,"w")
         pred_fh:write("Prediction, Target\n")
     end
@@ -243,7 +249,7 @@ function MatchingNetwork:evaluate(split)
         local f = hdf5.open(opt.data_folder .. str_split .. shard_n .. '.hdf5', 'r')
         local sp_ins = f:read('ins'):all()
         local sp_outs = f:read('outs'):all()
-        local sp_data = data(opt, {sp_ins, sp_outs})
+        local sp_data = Data(opt, {sp_ins, sp_outs})
 
         for i = 1, sp_data.n_batches do
             local episode = sp_data[i]
@@ -256,9 +262,11 @@ function MatchingNetwork:evaluate(split)
             n_correct = n_correct + torch.sum(torch.eq(preds, targs))
             n_preds = n_preds + targs:nElement()
             
+            --[[
             if flag == 1 and opt.debug == 1 then
                 dbg()
             end
+            ]]--
 
             if pred_fh ~= nil then
                 for j = 1, preds:nElement() do

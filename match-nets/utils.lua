@@ -53,7 +53,7 @@ function make_cnn_module(opt, n_input_feats)
         if opt.pool_ceil == 1 then
             pool_layer:ceil()
         end
-        output = pool_layer(nn.ReLU()(norm_layer))
+        output = pool_layer(nn.Tanh()(norm_layer))
     else
         local conv_layer = nn.SpatialConvolution(n_input_feats, opt.n_kernels,
             conv_w, conv_h, 1, 1, pad_w, pad_h)(input)
