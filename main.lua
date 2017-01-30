@@ -80,7 +80,7 @@ cmd:option('--beta2', .999, 'Adam beta2 parameter')
 cmd:option('--batch_size', 1, 'number of episodes per batch')
 cmd:option('--max_grad_norm', 0, 'maximum gradient value')
 
-cmd:option('--debug', 0, '1 if stop for debug after 20 epochs')
+cmd:option('--debug', 0, '1 if stop for debug after n epochs')
 cmd:option('--debug_after', 25, 'number of epochs after which to activate debugger')
 
 function log(file, msg)

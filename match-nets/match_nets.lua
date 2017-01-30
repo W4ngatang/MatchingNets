@@ -75,7 +75,6 @@ function MatchingNetwork:__init(opt, log_fh)
     self.crit = crit
     self.opt = opt
     self.log_fh = log_fh
-    self.flag = 0
 end
 
 function MatchingNetwork:train()
@@ -85,12 +84,12 @@ function MatchingNetwork:train()
     local log_fh = self.log_fh
 
     --[[ Parameter Init ]]--
-    params, grad_params = model:getParameters()
+    local params, grad_params = model:getParameters()
     if opt.init_dist == 'normal' then
         params:normal(0, opt.init_scale)
     elseif opt.init_dist == 'uniform' then
         params:uniform(-opt.init_scale, opt.init_scale)
-        --params = params + .01
+    elseif opt.init_dist == 'default' then
     else
         log(log_fh, 'Unsupported distribution for initialization!')
         return
@@ -146,6 +145,12 @@ function MatchingNetwork:train()
     --[[ Optimization Step ]]--
     local inputs, targs, total_loss, n_correct, n_preds, n_batches, tr_data
     function feval(p)
+        --[[
+        if p ~= params then
+            params:copy(p)
+        end
+        ]]--
+
         grad_params:zero()
         local outs = model:forward(inputs)
         local loss = crit:forward(outs, targs)
@@ -170,7 +175,50 @@ function MatchingNetwork:train()
     local last_score = self:evaluate("val")
     local best_score = last_score
     local best_params = params:clone()
+    local best_bn = {}
+
+    local running_mean = torch.Tensor(64)
+    ---[[ Super hacky way of storing batch norm params ]]--
+    local f = model.forwardnodes[6].data.module.forwardnodes
+    table.insert(best_bn, f[3].data.module.forwardnodes[4].data.module.running_mean)
+    table.insert(best_bn, f[4].data.module.forwardnodes[4].data.module.running_mean)
+    table.insert(best_bn, f[5].data.module.forwardnodes[4].data.module.running_mean)
+    table.insert(best_bn, f[6].data.module.forwardnodes[4].data.module.running_mean)
+    table.insert(best_bn, f[3].data.module.forwardnodes[4].data.module.running_var)
+    table.insert(best_bn, f[4].data.module.forwardnodes[4].data.module.running_var)
+    table.insert(best_bn, f[5].data.module.forwardnodes[4].data.module.running_var)
+    table.insert(best_bn, f[6].data.module.forwardnodes[4].data.module.running_var)
+
+    local g = model.forwardnodes[13].data.module.forwardnodes
+    table.insert(best_bn, g[3].data.module.forwardnodes[4].data.module.running_mean)
+    table.insert(best_bn, g[4].data.module.forwardnodes[4].data.module.running_mean)
+    table.insert(best_bn, g[5].data.module.forwardnodes[4].data.module.running_mean)
+    table.insert(best_bn, g[6].data.module.forwardnodes[4].data.module.running_mean)
+    table.insert(best_bn, g[3].data.module.forwardnodes[4].data.module.running_var)
+    table.insert(best_bn, g[4].data.module.forwardnodes[4].data.module.running_var)
+    table.insert(best_bn, g[5].data.module.forwardnodes[4].data.module.running_var)
+    table.insert(best_bn, g[6].data.module.forwardnodes[4].data.module.running_var)
+
+    table.insert(best_bn, f[3].data.module.forwardnodes[4].data.module.save_mean)
+    table.insert(best_bn, f[4].data.module.forwardnodes[4].data.module.save_mean)
+    table.insert(best_bn, f[5].data.module.forwardnodes[4].data.module.save_mean)
+    table.insert(best_bn, f[6].data.module.forwardnodes[4].data.module.save_mean)
+    table.insert(best_bn, f[3].data.module.forwardnodes[4].data.module.save_std)
+    table.insert(best_bn, f[4].data.module.forwardnodes[4].data.module.save_std)
+    table.insert(best_bn, f[5].data.module.forwardnodes[4].data.module.save_std)
+    table.insert(best_bn, f[6].data.module.forwardnodes[4].data.module.save_std)
+
+    table.insert(best_bn, g[3].data.module.forwardnodes[4].data.module.save_mean)
+    table.insert(best_bn, g[4].data.module.forwardnodes[4].data.module.save_mean)
+    table.insert(best_bn, g[5].data.module.forwardnodes[4].data.module.save_mean)
+    table.insert(best_bn, g[6].data.module.forwardnodes[4].data.module.save_mean)
+    table.insert(best_bn, g[3].data.module.forwardnodes[4].data.module.save_std)
+    table.insert(best_bn, g[4].data.module.forwardnodes[4].data.module.save_std)
+    table.insert(best_bn, g[5].data.module.forwardnodes[4].data.module.save_std)
+    table.insert(best_bn, g[6].data.module.forwardnodes[4].data.module.save_std)
+
     log(log_fh, "\tInitial validation accuracy: " .. last_score)
+
     for epoch = 1, opt.n_epochs do
         model:training()
         log(log_fh, "Epoch " ..epoch)
@@ -201,6 +249,7 @@ function MatchingNetwork:train()
         log(log_fh, "\tTraining time: " .. timer:time().real .. " seconds")
 
         if epoch >= opt.debug_after and opt.debg == 1 then
+            log(log_fh, "\tDebugging flag set")
             flag = 1
         end
         if opt.debug == 1 and flag == 1 then
@@ -217,11 +266,90 @@ function MatchingNetwork:train()
         if val_score > best_score then
             best_score = val_score
             best_params:copy(params)
+            log(log_fh,"\t\tBEST PARAMETERS!!!")
+
+            running_mean:copy(f[3].data.module.forwardnodes[4].data.module.save_mean)
+            best_bn[1]:copy(f[3].data.module.forwardnodes[4].data.module.running_mean)
+            best_bn[2]:copy(f[4].data.module.forwardnodes[4].data.module.running_mean)
+            best_bn[3]:copy(f[5].data.module.forwardnodes[4].data.module.running_mean)
+            best_bn[4]:copy(f[6].data.module.forwardnodes[4].data.module.running_mean)
+            best_bn[5]:copy(f[3].data.module.forwardnodes[4].data.module.running_var)
+            best_bn[6]:copy(f[4].data.module.forwardnodes[4].data.module.running_var)
+            best_bn[7]:copy(f[5].data.module.forwardnodes[4].data.module.running_var)
+            best_bn[8]:copy(f[6].data.module.forwardnodes[4].data.module.running_var)
+
+            best_bn[9]:copy(g[3].data.module.forwardnodes[4].data.module.running_mean)
+            best_bn[10]:copy(g[4].data.module.forwardnodes[4].data.module.running_mean)
+            best_bn[11]:copy(g[5].data.module.forwardnodes[4].data.module.running_mean)
+            best_bn[12]:copy(g[6].data.module.forwardnodes[4].data.module.running_mean)
+            best_bn[13]:copy(g[3].data.module.forwardnodes[4].data.module.running_var)
+            best_bn[14]:copy(g[4].data.module.forwardnodes[4].data.module.running_var)
+            best_bn[15]:copy(g[5].data.module.forwardnodes[4].data.module.running_var)
+            best_bn[16]:copy(g[6].data.module.forwardnodes[4].data.module.running_var)
+
+            best_bn[17]:copy(f[3].data.module.forwardnodes[4].data.module.save_mean)
+            best_bn[18]:copy(f[4].data.module.forwardnodes[4].data.module.save_mean)
+            best_bn[19]:copy(f[5].data.module.forwardnodes[4].data.module.save_mean)
+            best_bn[20]:copy(f[6].data.module.forwardnodes[4].data.module.save_mean)
+            best_bn[21]:copy(f[3].data.module.forwardnodes[4].data.module.save_std)
+            best_bn[22]:copy(f[4].data.module.forwardnodes[4].data.module.save_std)
+            best_bn[23]:copy(f[5].data.module.forwardnodes[4].data.module.save_std)
+            best_bn[24]:copy(f[6].data.module.forwardnodes[4].data.module.save_std)
+
+            best_bn[25]:copy(g[3].data.module.forwardnodes[4].data.module.save_mean)
+            best_bn[26]:copy(g[4].data.module.forwardnodes[4].data.module.save_mean)
+            best_bn[27]:copy(g[5].data.module.forwardnodes[4].data.module.save_mean)
+            best_bn[28]:copy(g[6].data.module.forwardnodes[4].data.module.save_mean)
+            best_bn[29]:copy(g[3].data.module.forwardnodes[4].data.module.save_std)
+            best_bn[30]:copy(g[4].data.module.forwardnodes[4].data.module.save_std)
+            best_bn[31]:copy(g[5].data.module.forwardnodes[4].data.module.save_std)
+            best_bn[32]:copy(g[6].data.module.forwardnodes[4].data.module.save_std)
+
         end
         last_score = val_score
         log(log_fh, "\tLoss: " .. total_loss/n_batches .. ", training accuracy: " .. n_correct/n_preds .. ", Validation accuracy: " .. val_score .. ", Best accuracy: " .. best_score)
     end
+
+    dbg()
     params:copy(best_params)
+    f[3].data.module.forwardnodes[4].data.module.running_mean:copy(best_bn[1])
+    f[4].data.module.forwardnodes[4].data.module.running_mean:copy(best_bn[2])
+    f[5].data.module.forwardnodes[4].data.module.running_mean:copy(best_bn[3])
+    f[6].data.module.forwardnodes[4].data.module.running_mean:copy(best_bn[4])
+    f[3].data.module.forwardnodes[4].data.module.running_var:copy(best_bn[5])
+    f[4].data.module.forwardnodes[4].data.module.running_var:copy(best_bn[6])
+    f[5].data.module.forwardnodes[4].data.module.running_var:copy(best_bn[7])
+    f[6].data.module.forwardnodes[4].data.module.running_var:copy(best_bn[8])
+
+    g[3].data.module.forwardnodes[4].data.module.running_mean:copy(best_bn[9])
+    g[4].data.module.forwardnodes[4].data.module.running_mean:copy(best_bn[10])
+    g[5].data.module.forwardnodes[4].data.module.running_mean:copy(best_bn[11])
+    g[6].data.module.forwardnodes[4].data.module.running_mean:copy(best_bn[12])
+    g[3].data.module.forwardnodes[4].data.module.running_var:copy(best_bn[13])
+    g[4].data.module.forwardnodes[4].data.module.running_var:copy(best_bn[14])
+    g[5].data.module.forwardnodes[4].data.module.running_var:copy(best_bn[15])
+    g[6].data.module.forwardnodes[4].data.module.running_var:copy(best_bn[16])
+    
+    f[3].data.module.forwardnodes[4].data.module.save_mean:copy(best_bn[17])
+    f[4].data.module.forwardnodes[4].data.module.save_mean:copy(best_bn[18])
+    f[5].data.module.forwardnodes[4].data.module.save_mean:copy(best_bn[19])
+    f[6].data.module.forwardnodes[4].data.module.save_mean:copy(best_bn[20])
+    f[3].data.module.forwardnodes[4].data.module.save_std:copy(best_bn[21])
+    f[4].data.module.forwardnodes[4].data.module.save_std:copy(best_bn[22])
+    f[5].data.module.forwardnodes[4].data.module.save_std:copy(best_bn[23])
+    f[6].data.module.forwardnodes[4].data.module.save_std:copy(best_bn[24])
+
+    g[3].data.module.forwardnodes[4].data.module.save_mean:copy(best_bn[25])
+    g[4].data.module.forwardnodes[4].data.module.save_mean:copy(best_bn[26])
+    g[5].data.module.forwardnodes[4].data.module.save_mean:copy(best_bn[27])
+    g[6].data.module.forwardnodes[4].data.module.save_mean:copy(best_bn[28])
+    g[3].data.module.forwardnodes[4].data.module.save_std:copy(best_bn[29])
+    g[4].data.module.forwardnodes[4].data.module.save_std:copy(best_bn[30])
+    g[5].data.module.forwardnodes[4].data.module.save_std:copy(best_bn[31])
+    g[6].data.module.forwardnodes[4].data.module.save_std:copy(best_bn[32])
+
+    dbg()
+
     print("Best validation accuracy: " .. self:evaluate("val"))
 end
 
