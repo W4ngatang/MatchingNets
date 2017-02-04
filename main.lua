@@ -44,12 +44,16 @@ cmd:option('--datafile', '', 'path to folder containing data files')
 cmd:option('--data_folder', '', 'path to folder containing data files')
 cmd:option('--logfile', '', 'file to log messages to')
 cmd:option('--predfile', '', 'file to print test predictions to')
+cmd:option('--load_model_from', '', 'file to load best model from')
+cmd:option('--save_model_to', '', 'file to save best model to')
 cmd:option('--print_freq', 5, 'how often to print training messages')
 
 -- Model options --
 cmd:option('--model', 'matching-net', 'model to use (matching-net or baseline')
 cmd:option('--init_scale', .05, 'scale of initial parameters')
-cmd:option('--init_dist', 'uniform', 'distribution to draw  initial parameters')
+cmd:option('--init_dist', 'uniform', 'distribution to draw initial parameters')
+cmd:option('--load_params_from', '', 'file to load weights from')
+cmd:option('--save_params_to', '', 'file to save weights to')
 cmd:option('--share_embed', 0, '1 if share parameters between embedding functions')
 cmd:option('--bn_eps', 1e-3, 'epsilson constant for batch normalization')
 cmd:option('--bn_momentum', 0.1, 'momentum term in batch normalization')
@@ -118,21 +122,33 @@ function main()
     log(log_fh, '\tTraining with ' .. opt.n_tr_shards .. ' shards...')
 
     -- build model
-    log(log_fh, 'Building model...')
-    if opt.model == 'matching-net' then
-        model = MatchingNetwork(opt, log_fh)
-    elseif opt.model == 'baseline' then
-        model = Baseline(opt, log_fh)
+    if opt.load_model_from ~= '' then
+        log(log_fh, 'Loading model from' .. opt.load_model_from .. '...')
+        model = torch.load(opt.load_model_from)
+        
+        log(log_fh, '\tModel loaded!')
+    else
+        log(log_fh, 'Building model...')
+        if opt.model == 'matching-net' then
+            model = MatchingNetwork(opt, log_fh)
+        elseif opt.model == 'baseline' then
+            model = Baseline(opt, log_fh)
+        end
+        log(log_fh, '\tModel built!')
     end
-    log(log_fh, '\tModel built!')
     collectgarbage()
 
     -- train
     log(log_fh, 'Starting training...')
-    model:train()
+    model:train(log_fh)
     collectgarbage()
 
     -- evaluate
+    if opt.save_model_to ~= '' then
+        model = torch.load(opt.save_model_to)
+        collectgarbage()
+    end
+    log(log_fh, "Best validation score: " .. model:evaluate("val"))
     log(log_fh, "Test accuracy: " .. model:evaluate("te"))
 
     -- cleanup
