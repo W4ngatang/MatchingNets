@@ -2,6 +2,7 @@ require 'torch'
 require 'nn'
 require 'optim'
 require 'graph'
+require 'pl'
 
 -- debugging library because lua doesn't seem to have one
 package.path = package.path .. ";" .. os.getenv("HOME") .. 
@@ -17,6 +18,7 @@ require 'baseline'
 require 'IndexAdd'
 
 require 'Log2'
+require 'Normalize2'
 
 require 'nngraph'
 require 'hdf5'
@@ -60,8 +62,11 @@ cmd:option('--bn_momentum', 0.1, 'momentum term in batch normalization')
 cmd:option('--bn_affine', true, 'affine parameters in batch normalization')
 
 -- CNN options --
+cmd:option('--n_channels', 1, 'number of initial image channels')
+cmd:option('--im_dim', 64, 'image dimensions (assuming square)')
 cmd:option('--n_modules', 4, 'number of convolutional units to stack')
 cmd:option('--n_kernels', 64, 'number of convolutional filters')
+cmd:option('--kernel_sizes', '3,3,3,3', 'sizes of convolutional filters')
 cmd:option('--nonlinearity', 'relu', 'nonlinearity to use')
 cmd:option('--conv_width', 3, 'convolution filter width')
 cmd:option('--conv_height', 3, 'convolution filter height')
@@ -85,6 +90,7 @@ cmd:option('--batch_size', 1, 'number of episodes per batch')
 cmd:option('--max_grad_norm', 0, 'maximum gradient value')
 
 cmd:option('--debug', 0, '1 if stop for debug after n epochs')
+cmd:option('--debug_on', '', 'comma separated string of epochs to debug after')
 cmd:option('--debug_after', 25, 'number of epochs after which to activate debugger')
 
 function log(file, msg)
@@ -121,21 +127,18 @@ function main()
     end
     log(log_fh, '\tTraining with ' .. opt.n_tr_shards .. ' shards...')
 
-    -- build model
-    if opt.load_model_from ~= '' then
-        log(log_fh, 'Loading model from' .. opt.load_model_from .. '...')
-        model = torch.load(opt.load_model_from)
-        
-        log(log_fh, '\tModel loaded!')
-    else
-        log(log_fh, 'Building model...')
-        if opt.model == 'matching-net' then
-            model = MatchingNetwork(opt, log_fh)
-        elseif opt.model == 'baseline' then
-            model = Baseline(opt, log_fh)
-        end
-        log(log_fh, '\tModel built!')
+    log(log_fh, 'Building model...')
+    if opt.model == 'matching-net' then
+        model = MatchingNetwork(opt, log_fh)
+    elseif opt.model == 'baseline' then
+        model = Baseline(opt, log_fh)
     end
+    if opt.load_model_from ~= '' then
+        model.model = nil
+        collectgarbage()
+        model.model = torch.load(opt.load_model_from)
+    end
+    log(log_fh, '\tModel built!')
     collectgarbage()
 
     -- train
@@ -145,8 +148,9 @@ function main()
 
     -- evaluate
     if opt.save_model_to ~= '' then
-        model = torch.load(opt.save_model_to)
+        model.model = nil
         collectgarbage()
+        model.model = torch.load(opt.save_model_to)
     end
     log(log_fh, "Best validation score: " .. model:evaluate("val"))
     log(log_fh, "Test accuracy: " .. model:evaluate("te"))

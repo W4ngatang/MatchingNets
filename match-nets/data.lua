@@ -9,6 +9,8 @@ function Data:__init(opt, datasets)
     self.gpuid = opt.gpuid
     self.xs = datasets[1]
     self.ys = datasets[2]:long()
+    self.n_channels = opt.n_channels -- TODO image might get distorted due to dimension swap
+    self.im_dim = opt.im_dim
     self.k = opt.k 
     self.N = opt.N 
     self.kB = opt.kB 
@@ -27,6 +29,8 @@ function Data.__index(self,idx)
             return "Error: invalid batch size"
         end
         local B = self.batch_size
+        local n_channels = self.n_channels
+        local im_dim = self.im_dim
         local set_size = self.N * self.k
         local bat_size = self.kB
         local shuffle
@@ -34,9 +38,9 @@ function Data.__index(self,idx)
         local p_idx = self.perm[idx] -- shuffle batch order
         local meta_xs = self.xs:narrow(1,(p_idx-1)*B+1,B)
         local meta_ys = self.ys:narrow(1,(p_idx-1)*B+1,B)
-        local set_xs = torch.zeros(B*set_size,self.xs:size(3),self.xs:size(4))
+        local set_xs = torch.zeros(B*set_size, n_channels, im_dim, im_dim)
         local set_ys = torch.zeros(B,set_size):long()
-        local bat_xs = torch.zeros(B*bat_size,self.xs:size(3),self.xs:size(4))
+        local bat_xs = torch.zeros(B*bat_size, n_channels, im_dim, im_dim)
         local bat_ys = torch.zeros(B*bat_size):long() -- one-dim tensor for easy evaluation
 
         for i=1,B do -- shuffle within episode

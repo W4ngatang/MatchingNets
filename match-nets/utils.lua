@@ -10,13 +10,18 @@ local dbg = require 'debugger'
 function make_cnn(opt)
     local input = nn.Identity()()
     local layers = {}
+    local kernel_sizes = (opt.kernel_sizes):split(',')
+    assert(#kernel_sizes == opt.n_modules)
+    for i = 1, #kernel_sizes do
+        kernel_sizes[i] = tonumber(kernel_sizes[i])
+    end
     for i=1,opt.n_modules do
         if i == 1 then
-            local conv_module = make_cnn_module(opt, 1)
+            local conv_module = make_cnn_module(opt, opt.n_channels, kernel_sizes[i])
             conv_module.name = 'cnn' .. i
             table.insert(layers, conv_module(input))
         else
-            local conv_module = make_cnn_module(opt, opt.n_kernels)
+            local conv_module = make_cnn_module(opt, opt.n_kernels, kernel_sizes[i])
             conv_module.name = 'cnn' .. i
             table.insert(layers, conv_module(layers[i-1]))
         end
@@ -25,9 +30,9 @@ function make_cnn(opt)
     return nn.gModule({input}, {output})
 end
 
-function make_cnn_module(opt, n_input_feats)
-    local conv_w = opt.conv_width
-    local conv_h = opt.conv_height
+function make_cnn_module(opt, n_input_feats, kernel_size)
+    local conv_w = kernel_size --opt.conv_width
+    local conv_h = kernel_size --opt.conv_height
     local pad_w = opt.conv_pad --math.floor((conv_w - 1) / 2)
     local pad_h = opt.conv_pad --math.floor((conv_h - 1) / 2)
     local pool_w = opt.pool_width

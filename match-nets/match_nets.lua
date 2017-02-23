@@ -24,7 +24,7 @@ function MatchingNetwork:__init(opt, log_fh)
     --   reshape -> B x kB x 64
     -- out: B x kB x 64
     local f = make_cnn(opt)
-    local embed_f = nn.Squeeze()(f(nn.Unsqueeze(2)(inputs[1])))
+    local embed_f = nn.Squeeze()(f(inputs[1]))
     local norm_f = nn.Normalize(2)(embed_f)
     local batch_f = nn.View(-1, opt.kB, opt.n_kernels)(norm_f)
 
@@ -43,7 +43,7 @@ function MatchingNetwork:__init(opt, log_fh)
         g:share(f, 'gradWeight')
         g:share(f, 'gradBias')
     end
-    local embed_g = nn.Squeeze()(g(nn.Unsqueeze(2)(inputs[2])))
+    local embed_g = nn.Squeeze()(g(inputs[2]))
     local norm_g = nn.Normalize(2)(embed_g)
     local batch_g = nn.View(-1, opt.N*opt.k, opt.n_kernels)(norm_g)
     
@@ -81,6 +81,11 @@ function MatchingNetwork:train(log_fh)
     local crit = self.crit
     local opt = self.opt
 
+    local debug_pts = (opt.debug_on):split(',')
+    for i = 1, #debug_pts do
+        debug_pts[i] = tonumber(debug_pts[i])
+    end
+
     --[[ Parameter Init ]]--
     local params, grad_params = model:getParameters()
     if opt.init_dist == 'normal' then
@@ -91,11 +96,6 @@ function MatchingNetwork:train(log_fh)
     else
         log(log_fh, 'Unsupported distribution for initialization!')
         return
-    end
-
-    if opt.load_params_from ~= '' then
-        fh = hdf5.open(opt.load_params_from, 'r')
-        params:copy(fh:read('params'):all():cuda())
     end
 
     --[[ Optimization Setup ]]--
@@ -148,12 +148,6 @@ function MatchingNetwork:train(log_fh)
     --[[ Optimization Step ]]--
     local inputs, targs, total_loss, n_correct, n_preds, n_batches, tr_data
     function feval(p)
-        --[[
-        if p ~= params then
-            params:copy(p)
-        end
-        ]]--
-
         grad_params:zero()
         local outs = model:forward(inputs)
         local loss = crit:forward(outs, targs)
@@ -171,6 +165,14 @@ function MatchingNetwork:train(log_fh)
             grad_params:mul(opt.max_grad_norm / grad_norm)
         end
         return loss, grad_params
+    end
+
+    if opt.debug == 1 then
+        for pt = 1, #debug_pts do
+            if debug_pts[pt] == 0 then
+                dbg()
+            end
+        end
     end
 
     --[[ Training Loop ]]--
@@ -206,16 +208,8 @@ function MatchingNetwork:train(log_fh)
             collectgarbage()
         end
         log(log_fh, "\tTraining time: " .. timer:time().real .. " seconds")
-
-        if epoch >= opt.debug_after and opt.debg == 1 then
-            log(log_fh, "\tDebugging flag set")
-            flag = 1
-        end
-        if opt.debug == 1 and flag == 1 then
-            dbg()
-        end
-
         timer:reset()
+
         val_score = self:evaluate("val")
         log(log_fh, "\tValidation time " .. timer:time().real .. " seconds")
         if opt.learning_rate_decay > 0 and opt.optimizer == 'adagrad' and val_score <= last_score then
@@ -224,13 +218,24 @@ function MatchingNetwork:train(log_fh)
         end
         if val_score > best_score then
             if opt.save_model_to ~= '' then
-                torch.save(opt.save_model_to, self)
+                timer:reset()
+                torch.save(opt.save_model_to, model)
+                log(log_fh, "\tSaved model to " .. opt.save_model_to .. " in ".. timer:time().real .. " seconds")
             end
             best_score = val_score
             log(log_fh,"\t\tBEST PARAMETERS!!!")
         end
         last_score = val_score
         log(log_fh, "\tLoss: " .. total_loss/n_batches .. ", training accuracy: " .. n_correct/n_preds .. ", Validation accuracy: " .. val_score .. ", Best accuracy: " .. best_score)
+
+        if opt.debug == 1 then
+            for pt = 1, #debug_pts do
+                if debug_pts[pt] == epoch then
+                    dbg()
+                end
+            end
+        end
+
     end
 
 end
@@ -272,11 +277,9 @@ function MatchingNetwork:evaluate(split)
             n_correct = n_correct + torch.sum(torch.eq(preds, targs))
             n_preds = n_preds + targs:nElement()
             
-            --[[
             if flag == 1 and opt.debug == 1 then
                 dbg()
             end
-            ]]--
 
             if pred_fh ~= nil then
                 for j = 1, preds:nElement() do
