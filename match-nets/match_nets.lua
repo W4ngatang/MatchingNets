@@ -237,7 +237,6 @@ function MatchingNetwork:train(log_fh)
         end
 
     end
-
 end
 
 function MatchingNetwork:evaluate(split)

@@ -33,8 +33,8 @@ end
 function make_cnn_module(opt, n_input_feats, kernel_size)
     local conv_w = kernel_size --opt.conv_width
     local conv_h = kernel_size --opt.conv_height
-    local pad_w = opt.conv_pad --math.floor((conv_w - 1) / 2)
-    local pad_h = opt.conv_pad --math.floor((conv_h - 1) / 2)
+    local pad_w = math.floor((conv_w - 1) / 2) --opt.conv_pad 
+    local pad_h = math.floor((conv_h - 1) / 2) --opt.conv_pad
     local pool_w = opt.pool_width
     local pool_h = opt.pool_height
 
