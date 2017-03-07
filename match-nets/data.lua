@@ -44,11 +44,13 @@ function Data.__index(self,idx)
         local bat_ys = torch.zeros(B*bat_size):long() -- one-dim tensor for easy evaluation
 
         for i=1,B do -- shuffle within episode
-            shuffle = torch.range(1,set_size):long() --torch.randperm(set_size):long()
+            --shuffle = torch.randperm(set_size):long()
+            shuffle = torch.range(1,set_size):long() 
             set_xs:narrow(1,(i-1)*set_size+1,set_size):index(meta_xs[i]:narrow(1,1,set_size),1,shuffle)
             set_ys[i]:index(meta_ys[i]:narrow(1,1,set_size),1,shuffle)
 
-            shuffle = torch.range(1,bat_size):long() --torch.randperm(bat_size):long()
+            shuffle = torch.randperm(bat_size):long()
+            --shuffle = torch.range(1,bat_size):long() 
             bat_xs:narrow(1,(i-1)*bat_size+1,bat_size):index(meta_xs[i]:narrow(1,set_size+1,bat_size),1,shuffle)
             bat_ys:narrow(1,(i-1)*bat_size+1,bat_size):index(meta_ys[i]:narrow(1,set_size+1,bat_size),1,shuffle)
         end

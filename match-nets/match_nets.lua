@@ -43,10 +43,18 @@ function MatchingNetwork:__init(opt, log_fh)
         g:share(f, 'gradWeight')
         g:share(f, 'gradBias')
     end
+    local n_set = opt.N*opt.k
     local embed_g = nn.Squeeze()(g(inputs[2]))
     local norm_g = nn.Normalize(2)(embed_g)
-    local batch_g = nn.View(-1, opt.N*opt.k, opt.n_kernels)(norm_g)
-    
+    local gs = nn.View(-1, n_set, opt.n_kernels)(norm_g)
+    local batch_g = gs
+
+    if opt.prototypes == 1 then
+        batch_g = nn.Normalize(2)(nn.IndexAdd(2, opt.N)({batch_g, inputs[3]}))
+        n_set = opt.N
+    end
+
+   
     -- in (B x kB x 64) , (B x N*k x 64)
     --   MM: -> B x N*k x kB
     --   Transpose: B x kB x N*k
@@ -57,13 +65,34 @@ function MatchingNetwork:__init(opt, log_fh)
     --   IndexAdd -> B x N x kB
     --   Transpose -> B x kB x N
     --   View -> B*kB x N
-    local cos_dist = nn.MM(false, true)({batch_g, batch_f})
-    local unbatch1 = nn.View(-1, opt.N*opt.k)(nn.Transpose({2,3})(cos_dist))
-    local attn_scores = nn.SoftMax()(unbatch1)
-    local rebatch = nn.Transpose({2,3})(nn.View(-1, opt.kB, opt.N*opt.k)(attn_scores))
-    local class_probs = nn.IndexAdd(1, opt.N)({rebatch, inputs[3]})
-    local unbatch2 = nn.View(-1, opt.N)(nn.Transpose({2,3})(class_probs))
-    local log_probs = nn.Log()(unbatch2)
+    if opt.contextual_embed == 'simple' then
+        -- view: B * (N*k*kB) * d)
+        repeat_batch = nn.Replicate(n_set, 2, 2)(batch_f)
+        rebatch_batch = nn.View(-1, opt.N*opt.k*opt.kB, opt.n_kernels)(nn.Contiguous()(repeat_batch))
+
+        -- view: B * (N*k*kB) * d)
+        repeat_set = nn.Replicate(opt.kB, 1, 2)(batch_g)
+        rebatch_set = nn.View(-1, n_set*opt.kB, opt.n_kernels)(nn.Contiguous()(repeat_set))
+        concat = nn.JoinTable(2)({rebatch_batch, rebatch_set})
+        reshape = nn.View(-1, 2*opt.n_kernels)(nn.Transpose({2,3})(concat))
+        w1 = nn.Linear(2*opt.n_kernels, opt.n_kernels)(reshape)
+        nonlinearity = nn.Tanh()(w1)
+        w2 = nn.Linear(opt.n_kernels, 1)(nonlinearity)
+        unbatch = nn.View(-1, n_set)(w2)
+    else
+        cos_dist = nn.MM(false, true)({batch_g, batch_f})
+        unbatch = nn.View(-1, n_set)(nn.Transpose({2,3})(cos_dist))
+    end
+
+    local attn_scores = nn.SoftMax()(unbatch)
+    local rebatch = nn.Transpose({2,3})(nn.View(-1, opt.kB, n_set)(attn_scores))
+    local tmp_batch = rebatch
+    if opt.prototypes ~= 1 then
+        local class_probs = nn.IndexAdd(1, opt.N)({rebatch, inputs[3]})
+        local unbatch2 = nn.View(-1, opt.N)(nn.Transpose({2,3})(class_probs))
+        tmp_batch = unbatch
+    end
+    local log_probs = nn.Log()(tmp_batch)
     local outputs = {log_probs}
     local crit = nn.ClassNLLCriterion()
     local model = nn.gModule(inputs, outputs)
