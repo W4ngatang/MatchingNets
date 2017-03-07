@@ -50,7 +50,9 @@ function MatchingNetwork:__init(opt, log_fh)
     local batch_g = gs
 
     if opt.prototypes == 1 then
-        batch_g = nn.Normalize(2)(nn.IndexAdd(2, opt.N)({batch_g, inputs[3]}))
+        local prototypes = nn.IndexAdd(1, opt.N)({batch_g, inputs[3]})
+        batch_g = nn.View(-1, n_set, opt.n_kernels)(
+            nn.Normalize(2)(nn.View(-1, opt.n_kernels)(prototypes)))
         n_set = opt.N
     end
 
@@ -85,12 +87,12 @@ function MatchingNetwork:__init(opt, log_fh)
     end
 
     local attn_scores = nn.SoftMax()(unbatch)
-    local rebatch = nn.Transpose({2,3})(nn.View(-1, opt.kB, n_set)(attn_scores))
-    local tmp_batch = rebatch
+    local tmp_batch = attn_scores
     if opt.prototypes ~= 1 then
+        local rebatch = nn.Transpose({2,3})(nn.View(-1, opt.kB, n_set)(attn_scores))
         local class_probs = nn.IndexAdd(1, opt.N)({rebatch, inputs[3]})
         local unbatch2 = nn.View(-1, opt.N)(nn.Transpose({2,3})(class_probs))
-        tmp_batch = unbatch
+        tmp_batch = unbatch2
     end
     local log_probs = nn.Log()(tmp_batch)
     local outputs = {log_probs}
