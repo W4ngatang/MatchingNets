@@ -50,7 +50,9 @@ function MatchingNetwork:__init(opt, log_fh)
     local batch_g = gs
 
     if opt.prototypes == 1 then
-        local prototypes = nn.IndexAdd(1, opt.N)({batch_g, inputs[3]})
+        log(log_fh, '\tUsing prototypes...')
+        -- don't need to average because of normalization
+        prototypes = nn.IndexAdd(1, opt.N)({batch_g, inputs[3]})
         batch_g = nn.View(-1, n_set, opt.n_kernels)(
             nn.Normalize(2)(nn.View(-1, opt.n_kernels)(prototypes)))
         n_set = opt.N

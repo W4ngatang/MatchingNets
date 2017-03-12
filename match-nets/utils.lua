@@ -7,6 +7,33 @@ local dbg = require 'debugger'
 -- Various models used throughout experiments
 --
 
+function make_brnn(opt)
+    local fwd = nn.FastLSTM(opt.n_kernels, opt.n_kernels)
+    local bwd = fwd:clone()
+    bwd:reset()
+    local merge = nn.CAddTable() -- will add the two hidden states
+    local brnn = nn.BiSequencer(fwd)
+    local rnn = nn.Sequential():add(brnn)
+
+    return rnn
+end
+
+function make_fce(opt)
+    --[[
+    --
+    -- will be used as
+    --   FCE()({test, set})
+    --
+    ]]--
+
+    local inputs = {}
+    table.insert(inputs, nn.Identity()()) -- test embeddings; size?
+    table.insert(inputs, nn.Identity()()) -- set embeddings; size?
+
+    -- attention
+
+end
+
 function make_cnn(opt)
     local input = nn.Identity()()
     local layers = {}

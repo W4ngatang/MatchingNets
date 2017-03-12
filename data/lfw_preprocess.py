@@ -8,31 +8,6 @@ from PIL import Image
 import numpy as np
 from scipy.misc import imread, imresize, imsave
 
-
-def load_image(f):
-    '''
-
-    Due to resizing, images are no longer purely black and white
-    Rounding to 0 or 1 based on a threshold seems ok
-    Threshold arbitrarily chosen as .5
-
-    '''
-    global start, total
-    im = imread(f, flatten=True)
-    if args.resize > 0:
-        im = np.asarray(imresize(im, size=(args.resize, args.resize)), dtype=np.float32) / 255.
-    inverted = 1. - im
-    max_val = np.max(inverted)
-    if max_val > 0.:
-        inverted /= max_val
-        if max_val < 1.:
-            start += 1
-    if args.thresh > 0:
-        return (inverted / thresh).astype(int)
-    else:
-        total += 1
-        return inverted
-
 def load_data(path):
     '''
     Load data from raw images
@@ -48,7 +23,7 @@ def load_data(path):
     id2ims = {}
     for person in os.listdir(path):
         raw_ims = os.listdir(path+person)
-        if len(raw_ims) >= 3: # only take people with at least 3 images, won't work for k = 5
+        if len(raw_ims) >= args.min_ims:
             ims = []
             person_id = len(person2id)
             person2id[person] = person_id
@@ -161,6 +136,7 @@ def main(arguments):
     parser.add_argument('--reflections', help='1 if augment with reflections', type=int, default=1)
     parser.add_argument('--crops', help='1 if augment with crops', type=int, default=1)
     parser.add_argument('--reuse_test', help='1 if resue test classes for validation', type=int, default=1)
+    parser.add_argument('--min_ims', help='minimum number of images for a person to be used', type=int, default=3)
 
     parser.add_argument('--N', help='number of unique classes per episode', type=int, default=5)
     parser.add_argument('--k', help='number of examples per class in the support set', type=int, default=1)

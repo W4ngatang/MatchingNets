@@ -22,6 +22,8 @@ def load_image(f):
     im = imread(f, flatten=True)
     if args.resize > 0:
         im = np.asarray(imresize(im, size=(args.resize, args.resize)), dtype=np.float32) / 255.
+        args.im_dim = args.resize
+    im = np.expand_dims(im, axis = 0)
     inverted = 1. - im
     max_val = np.max(inverted)
     if max_val > 0.:
@@ -56,7 +58,7 @@ def load_data(path, split=1):
         n_classes = 0
         for alphabet in alphabets:
             n_classes += len(os.listdir(path + '/' + alphabet))
-        data = np.zeros((n_classes, n_ex_per_class, args.im_dim, args.im_dim))
+        data = np.zeros((n_classes, n_ex_per_class, args.n_channels, args.im_dim, args.im_dim))
         print '\t%d classes to load' % n_classes
         
         count = 0
@@ -73,7 +75,6 @@ def load_data(path, split=1):
             if not (count % int(n_classes/10)):
                 print '\tFinished %d classes\n' % count
 
-        print 'Renormalized %d of %d classes' % (counter, total)
     except Exception as e:
         pdb.set_trace()
     return data, n_classes
@@ -81,11 +82,11 @@ def load_data(path, split=1):
 def augment(data):
     try:
         n_data = data.shape[0]
-        augmented = np.zeros((n_data*4, n_ex_per_class, args.im_dim, args.im_dim))
+        augmented = np.zeros((n_data*4, n_ex_per_class, args.n_channels, args.im_dim, args.im_dim))
         for i, char in enumerate(data):
             for j,ex in enumerate(char):
                 for k in xrange(4):
-                    augmented[k*n_data+i, j, :, :] = np.rot90(ex, k)
+                    augmented[k*n_data+i, j,] = np.rot90(ex.transpose([2,1,0]), k).transpose([2,1,0])
     except Exception as e:
         pdb.set_trace()
     return augmented
@@ -105,7 +106,7 @@ def create_oneshot_episodes(data, n_episodes):
         k, kB = args.k, args.kB
         n_classes = data.shape[0] 
         base_bat_offset = args.N * k
-        inputs = np.zeros((n_episodes, (args.N*k)+kB, args.im_dim, args.im_dim))
+        inputs = np.zeros((n_episodes, (args.N*k)+kB, args.n_channels, args.im_dim, args.im_dim))
         outputs = np.zeros((n_episodes, (args.N*k)+kB, 1))
 
         # for each episode, sample N classes
@@ -184,6 +185,7 @@ def main(arguments):
             remaining classes are split evenly among validation and test', type=int, default=1200)
     
     parser.add_argument('--im_dim', help='dim of image along a side', type=int, default=28)
+    parser.add_argument('--n_channels', help='number of image channels', type=int, default=1)
     parser.add_argument('--thresh', help='threshold (in (0,1)) for image binarization, 0 for none', type=float, default=0.)
     parser.add_argument('--resize', help='dimension (along a side) to resize to, 0 for none', type=int, default=0)
     args = parser.parse_args(arguments)
@@ -203,7 +205,7 @@ def main(arguments):
         eval_data, n_eval_classes = load_data(args.data_path + '/' + 'images_evaluation')
 
         n_classes = n_bg_classes + n_eval_classes
-        data = np.zeros((bg_data.shape[0]+eval_data.shape[0], n_ex_per_class, bg_data.shape[2], bg_data.shape[3]))
+        data = np.zeros((bg_data.shape[0]+eval_data.shape[0], n_ex_per_class, args.n_channels, args.im_dim, args.im_dim))
         data[:bg_data.shape[0]] = bg_data
         data[bg_data.shape[0]:] = eval_data
 

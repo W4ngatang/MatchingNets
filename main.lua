@@ -1,5 +1,6 @@
 require 'torch'
 require 'nn'
+--require 'rnn'
 require 'optim'
 require 'graph'
 require 'pl'
@@ -37,11 +38,12 @@ cmd:text()
 cmd:text('Train a matching network')
 cmd:text('Options')
 
+-- GPU and misc. --
 cmd:option('--seed', 42, 'random seed')
 cmd:option('--gpuid', 1, '>0 if use CUDA')
 cmd:option('--cudnn', 1, '1 if use cudnn')
 
--- Input/Output options
+-- Input,Output options --
 cmd:option('--datafile', '', 'path to folder containing data files')
 cmd:option('--data_folder', '', 'path to folder containing data files')
 cmd:option('--logfile', '', 'file to log messages to')
@@ -70,9 +72,6 @@ cmd:option('--n_modules', 4, 'number of convolutional units to stack')
 cmd:option('--n_kernels', 64, 'number of convolutional filters')
 cmd:option('--kernel_sizes', '3,3,3,3', 'sizes of convolutional filters')
 cmd:option('--nonlinearity', 'relu', 'nonlinearity to use')
-cmd:option('--conv_width', 3, 'convolution filter width')
-cmd:option('--conv_height', 3, 'convolution filter height')
-cmd:option('--conv_pad', 1, 'convolutional padding')
 cmd:option('--pool_ceil', 0, '1 if ceil in pooling dimension, else floor')
 cmd:option('--pool_width', 2, 'max pooling filter width')
 cmd:option('--pool_height', 2, 'max pooling filter height')

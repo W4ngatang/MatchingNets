@@ -9,8 +9,11 @@ function Data:__init(opt, datasets)
     self.gpuid = opt.gpuid
     self.xs = datasets[1]
     self.ys = datasets[2]:long()
-    self.n_channels = opt.n_channels -- TODO image might get distorted due to dimension swap
+    self.n_channels = opt.n_channels
     self.im_dim = opt.im_dim
+    assert(self.xs:size()[3] == self.n_channels, 'only 1d layer supported')
+    assert(self.xs:size()[4] == self.im_dim, 'only 1d layer supported')
+    assert(self.xs:size()[5] == self.im_dim, 'only 1d layer supported')
     self.k = opt.k 
     self.N = opt.N 
     self.kB = opt.kB 
