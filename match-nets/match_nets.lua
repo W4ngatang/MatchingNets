@@ -17,24 +17,25 @@ function MatchingNetwork:__init(opt, log_fh)
     table.insert(inputs, nn.Identity()()) -- y_i: B x N*k
 
     -- in: B*kB x im x im
-    --   unsqueeze -> B*kB x 1 x im x im
-    --   f -> B*kB x 64 x 1 x 1
-    --   squeeze -> B*kB x 64
-    --   normalize -> B*kB x 64
-    --   reshape -> B x kB x 64
-    -- out: B x kB x 64
+    --   unsqueeze : B*kB x 1 x im x im
+    --   f : B*kB x n_kern x 1 x 1
+    --   squeeze : B*kB x n_kern
+    --   normalize : B*kB x n_kern
+    --   view : B x kB x n_kern
+    -- out: B x kB x n_kern
     local f = make_cnn(opt)
     local embed_f = nn.Squeeze()(f(inputs[1]))
     local norm_f = nn.Normalize(2)(embed_f)
     local batch_f = nn.View(-1, opt.kB, opt.n_kernels)(norm_f)
 
     -- in: B*N*k x im x im
-    --   unsqueeze -> B*N*k x 1 x im x im
-    --   g -> B*N*k x 64 x 1 x 1
-    --   squeeze -> B*N*k x 64
-    --   normalize -> B*N*k x 64
-    --   view -> B x N*k x 64
-    -- out: B x N*k x 64
+    --   unsqueeze : B*n_set x 1 x im x im
+    --   g : B*n_set x n_kern x 1 x 1
+    --   squeeze : B*n_set x n_kern
+    --   normalize : B*n_set x n_kern
+    --   view : B x n_set x n_kern
+    -- out: B x n_set x n_kern
+    local n_set = opt.N*opt.k
     local g = make_cnn(opt)
     if opt.share_embed == 1 then
         log(log_fh, '\tTying embedding function parameters...')
@@ -43,12 +44,17 @@ function MatchingNetwork:__init(opt, log_fh)
         g:share(f, 'gradWeight')
         g:share(f, 'gradBias')
     end
-    local n_set = opt.N*opt.k
     local embed_g = nn.Squeeze()(g(inputs[2]))
     local norm_g = nn.Normalize(2)(embed_g)
-    local gs = nn.View(-1, n_set, opt.n_kernels)(norm_g)
-    local batch_g = gs
+    local batch_g = nn.View(-1, n_set, opt.n_kernels)(norm_g)
 
+    -- Class prototypes
+    -- in: B x n_set x n_kern
+    --   IndexAdd: B x N x n_kern
+    --   View: B*N x n_kern
+    --   Normalize: B*N x n_kern
+    --   View: B x N x n_kern
+    -- out: B x n_set x n_kern
     if opt.prototypes == 1 then
         log(log_fh, '\tUsing prototypes...')
         -- don't need to average because of normalization
@@ -58,18 +64,11 @@ function MatchingNetwork:__init(opt, log_fh)
         n_set = opt.N
     end
 
-   
-    -- in (B x kB x 64) , (B x N*k x 64)
-    --   MM: -> B x N*k x kB
-    --   Transpose: B x kB x N*k
-    --   View -> (B * kB) x N*k
-    --   SoftMax -> (B * kB) x N*k
-    --   View -> B x kB x N*k
-    --   Transpose -> B x N*k x kB
-    --   IndexAdd -> B x N x kB
-    --   Transpose -> B x kB x N
-    --   View -> B*kB x N
+    -- Contextual embeddings: parameters after embedding
+    -- in:(B x kB x n_kern) , (B x n_set x n_kern)
+    -- out: (B x kB x n_kern), (B x n_set x n_kern)
     if opt.contextual_embed == 'simple' then
+        log(log_fh, '\tUsing simple contextual embeddings...')
         -- view: B * (N*k*kB) * d)
         repeat_batch = nn.Replicate(n_set, 2, 2)(batch_f)
         rebatch_batch = nn.View(-1, opt.N*opt.k*opt.kB, opt.n_kernels)(nn.Contiguous()(repeat_batch))
@@ -83,21 +82,51 @@ function MatchingNetwork:__init(opt, log_fh)
         nonlinearity = nn.Tanh()(w1)
         w2 = nn.Linear(opt.n_kernels, 1)(nonlinearity)
         unbatch = nn.View(-1, n_set)(w2)
-    else
-        cos_dist = nn.MM(false, true)({batch_g, batch_f})
-        unbatch = nn.View(-1, n_set)(nn.Transpose({2,3})(cos_dist))
+    elseif opt.contextual_embed == 'fce' then
+        log(log_fh, '\tUsing full context embeddings...')
+        fce_g = make_fce_g(opt)
+        fce_f = make_fce_f(opt, n_set)
+        local h_0, c_0
+        if opt.init_fce == 'zero' then
+            h_0 = torch.zeros(opt.batch_size*opt.kB, 2*opt.n_kernels)
+            c_0 = torch.zeros(opt.batch_size*opt.kB, opt.n_kernels)
+        elseif opt.init_fce == 'random' then
+            h_0 = torch.rand(2*opt.n_kernels) - .5 * 2*opt.init_scale
+            c_0 = torch.rand(opt.n_kernels) -.5 * 2*opt.init_scale
+        end
+        if opt.gpuid > 0 then
+            h_0 = h_0:cuda()
+            c_0 = c_0:cuda()
+        end
+        batch_g = fce_g(batch_g)
+        batch_f = fce_f({batch_f, batch_g, h_0, c_0})
     end
 
-    local attn_scores = nn.SoftMax()(unbatch)
-    local tmp_batch = attn_scores
+
+    -- in:(B x kB x n_kern) , (B x n_set x n_kern)
+    --   MM:: B x n_set x kB
+    --   Transpose: B x kB x n_set
+    --   View: (B*kB) x n_set
+    --   SoftMax: (B*kB) x n_set
+    --   (View): B x kB x n_set 
+    --   (Transpose): B x n_set x kB
+    --   (IndexAdd): B x N x kB
+    --   (Transpose): B x kB x N
+    --   (View): (B*kB) x N
+    -- out: idk
+    local cos_dist = nn.MM(false, true)({batch_g, batch_f})
+    local unbatch = nn.View(-1, n_set)(nn.Transpose({2,3})(cos_dist))
+    local set_probs = nn.SoftMax()(unbatch)
+    local class_probs = set_probs
     if opt.prototypes ~= 1 then
-        local rebatch = nn.Transpose({2,3})(nn.View(-1, opt.kB, n_set)(attn_scores))
-        local class_probs = nn.IndexAdd(1, opt.N)({rebatch, inputs[3]})
-        local unbatch2 = nn.View(-1, opt.N)(nn.Transpose({2,3})(class_probs))
-        tmp_batch = unbatch2
+        local rebatch = nn.Transpose({2,3})(
+            nn.View(-1, opt.kB, n_set)(attn_scores))
+        class_probs = nn.View(-1, opt.N)(nn.Transpose({2,3})(
+            nn.IndexAdd(1, opt.N)({rebatch, inputs[3]})))
     end
-    local log_probs = nn.Log()(tmp_batch)
+    local log_probs = nn.Log()(class_probs)
     local outputs = {log_probs}
+
     local crit = nn.ClassNLLCriterion()
     local model = nn.gModule(inputs, outputs)
     if opt.gpuid > 0 then
