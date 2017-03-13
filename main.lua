@@ -1,6 +1,6 @@
 require 'torch'
 require 'nn'
---require 'rnn'
+require 'rnn' -- TODO dependent import?
 require 'optim'
 require 'graph'
 require 'pl'

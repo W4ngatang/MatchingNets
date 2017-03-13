@@ -8,11 +8,9 @@ local dbg = require 'debugger'
 --
 
 function make_fce_g(opt)
-    local inputs = {}
-    table.insert(inputs, nn.Identity()()) -- set embs; B x n_set x n_kern
-    local brnn = make_brnn(opt)
-
-    local gs = nn.CAddTable()({gs_hat, inputs[1]})
+    local inputs = {nn.Identity()()} -- set embs; B x n_set x n_kern
+    local hs = nn.SeqBRNN(opt.n_kernels, opt.n_kernels, true)(inputs[1])
+    local gs = nn.CAddTable()({hs, inputs[1]})
     local outputs = {gs}
     return nn.gModule({inputs, outputs})
 end

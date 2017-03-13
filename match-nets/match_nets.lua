@@ -98,7 +98,7 @@ function MatchingNetwork:__init(opt, log_fh)
             h_0 = h_0:cuda()
             c_0 = c_0:cuda()
         end
-        batch_g = fce_g(batch_g)
+        batch_g = fce_g({batch_g})
         batch_f = fce_f({batch_f, batch_g, h_0, c_0})
     end
 
