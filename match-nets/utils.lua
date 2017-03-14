@@ -12,18 +12,7 @@ function make_fce_g(opt)
     local hs = nn.SeqBRNN(opt.n_kernels, opt.n_kernels, true)(inputs[1])
     local gs = nn.CAddTable()({hs, inputs[1]})
     local outputs = {gs}
-    return nn.gModule({inputs, outputs})
-end
-
-function make_brnn(opt)
-    local fwd = nn.FastLSTM(opt.n_kernels, opt.n_kernels)
-    local bwd = fwd:clone()
-    bwd:reset()
-    local merge = nn.CAddTable() -- will add the two hidden states
-    local brnn = nn.BiSequencer(fwd)
-    local rnn = nn.Sequential():add(brnn)
-
-    return rnn
+    return nn.gModule(inputs, outputs)
 end
 
 function make_fce_f(opt, n_set)
@@ -32,12 +21,11 @@ function make_fce_f(opt, n_set)
     table.insert(inputs, nn.Identity()()) -- set embs; B x n_set x n_kern
     table.insert(inputs, nn.Identity()()) -- c_0; (B*kB) x n_kern
     table.insert(inputs, nn.Identity()()) -- h_0; (B*kB) x (2*n_kern) 
-        -- TODO needs to be (B*kB) x n_kern
 
     -- (B*kB) x n_kern
     local reshaped_x = nn.View(-1, opt.n_kernels)(inputs[1])
 
-    local prev_c, prev_hid, next_c, next_hid
+    local prev_c, prev_hid, next_c, next_h, next_hid
     for l = 1, opt.L do -- L is the number of processing steps
         if l == 1 then
             prev_c = inputs[3]
@@ -58,13 +46,13 @@ function make_fce_f(opt, n_set)
 
         -- split into the four different linear layers
         -- Reshape: (B*kB) x 4 x n_kern
-        -- SplitTable: 4 x (B*kB) x n_kern TODO how to split / unpack it?
+        -- SplitTable: 4 x (B*kB) x n_kern
         local reshaped_linear = nn.Reshape(4, opt.n_kernels)(linear) 
-        local split_linear = nn.SplitTable(2)(reshaped)
-        local in_gate = nn.Sigmoid()(split_linear[1])
-        local forget_gate = nn.Sigmoid()(split_linear[2])
-        local out_gate = nn.Sigmoid()(split_linear[3])
-        local in_mlp = nn.Tanh()(split_linear[4])
+        local n1, n2, n3, n4 = nn.SplitTable(2)(reshaped_linear):split(4)
+        local in_gate = nn.Sigmoid()(n1)
+        local forget_gate = nn.Sigmoid()(n2)
+        local out_gate = nn.Sigmoid()(n3)
+        local in_mlp = nn.Tanh()(n4)
 
         -- compute next h, c
         -- next_c: (B*kB) x n_kern
@@ -74,25 +62,32 @@ function make_fce_f(opt, n_set)
             nn.CMulTable()({in_gate, in_mlp})})
         local next_h_hat = nn.CMulTable()({
             out_gate, nn.Tanh()(next_c)})
-        local next_h = nn.CAddTable()({
+        next_h = nn.CAddTable()({
             reshaped_x, next_h_hat})
 
-        -- reshape_h: B x kB x n_kern
-        -- attn_scores: (B*kB) x n_set
-        -- attn_vec = (B*kB) x n_kern
-        -- next_hid: (B*kB) x 2*n_kern
-        local reshape_h = nn.View(-1, opt.kB, opt.n_kernels)(next_h)
-        local attn_scores = nn.SoftMax()(nn.View(-1, n_set)(
-            nn.MM({false, true})({
-            next_h_copies, inputs[2]})))
-        local attn_vec = nn.MM({true, false})({
-            nn.Unsqueeze(3)(attn_scores), 
-            nn.Reshape(opt.kB*opt.batch_size, opt.n_set, opt.n_kernels)(
-            nn.Transpose({1,2})(nn.Replicate(opt.kB, 1, 2)(inputs[2])))})
-        next_hid = nn.JoinTable(2)({
-            next_h, attn_vec})
+        if l < opt.L then
+            -- reshape_h: B x kB x n_kern
+            -- attn_scores: (B*kB) x n_set
+            -- attn_vec = (B*kB) x n_kern
+            --   Unsqueeze: (B*kB) x n_set x 1
+            --   Replicate: B x kB x n_set x n_kern
+            --     Transpose: kB x B x n_set x n_kern
+            --     Reshape: (B*kB) x n_set x n_kern
+            -- next_hid: (B*kB) x 2*n_kern
+            local reshape_h = nn.View(-1, opt.kB, opt.n_kernels)(next_h)
+            local attn_scores = nn.SoftMax()(nn.View(-1, n_set)(
+                nn.MM(false, true)({
+                reshape_h, inputs[2]}))) -- inputs[2]: B x n_set x n_kern
+            local attn_vec = nn.MM({true, false})({
+                nn.Reshape(opt.kB*opt.batch_size, n_set, opt.n_kernels)(
+                nn.Transpose({1,2})(
+                nn.Replicate(opt.kB, 1, 2)(inputs[2]))),
+                nn.Unsqueeze(3)(attn_scores)})
+            next_hid = nn.JoinTable(2)({
+                next_h, attn_vec})
+        end
     end
-    local outputs = {next_hid}
+    local outputs = {nn.Reshape(opt.batch_size, opt.kB, opt.n_kernels)(next_h)}
     return nn.gModule(inputs, outputs)
 end
 

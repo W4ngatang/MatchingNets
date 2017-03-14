@@ -15,6 +15,10 @@ function MatchingNetwork:__init(opt, log_fh)
     table.insert(inputs, nn.Identity()()) -- hat(x): B*kb x im x im
     table.insert(inputs, nn.Identity()()) -- x_i: B*N*k x im x im
     table.insert(inputs, nn.Identity()()) -- y_i: B x N*k
+    if opt.contextual_embed == 'fce' then
+        table.insert(inputs, nn.Identity()()) -- h_0
+        table.insert(inputs, nn.Identity()()) -- c_0
+    end
 
     -- in: B*kB x im x im
     --   unsqueeze : B*kB x 1 x im x im
@@ -68,6 +72,7 @@ function MatchingNetwork:__init(opt, log_fh)
     -- in:(B x kB x n_kern) , (B x n_set x n_kern)
     -- out: (B x kB x n_kern), (B x n_set x n_kern)
     if opt.contextual_embed == 'simple' then
+        -- TODO redo this
         log(log_fh, '\tUsing simple contextual embeddings...')
         -- view: B * (N*k*kB) * d)
         repeat_batch = nn.Replicate(n_set, 2, 2)(batch_f)
@@ -84,13 +89,12 @@ function MatchingNetwork:__init(opt, log_fh)
         unbatch = nn.View(-1, n_set)(w2)
     elseif opt.contextual_embed == 'fce' then
         log(log_fh, '\tUsing full context embeddings...')
-        fce_g = make_fce_g(opt)
-        fce_f = make_fce_f(opt, n_set)
+
         local h_0, c_0
         if opt.init_fce == 'zero' then
             h_0 = torch.zeros(opt.batch_size*opt.kB, 2*opt.n_kernels)
             c_0 = torch.zeros(opt.batch_size*opt.kB, opt.n_kernels)
-        elseif opt.init_fce == 'random' then
+        else
             h_0 = torch.rand(2*opt.n_kernels) - .5 * 2*opt.init_scale
             c_0 = torch.rand(opt.n_kernels) -.5 * 2*opt.init_scale
         end
@@ -98,8 +102,13 @@ function MatchingNetwork:__init(opt, log_fh)
             h_0 = h_0:cuda()
             c_0 = c_0:cuda()
         end
+        self.h_0 = h_0
+        self.c_0 = c_0
+
+        local fce_g = make_fce_g(opt)
+        local fce_f = make_fce_f(opt, n_set)
         batch_g = fce_g({batch_g})
-        batch_f = fce_f({batch_f, batch_g, h_0, c_0})
+        batch_f = fce_f({batch_f, batch_g, inputs[4], inputs[5]})
     end
 
 
@@ -113,14 +122,14 @@ function MatchingNetwork:__init(opt, log_fh)
     --   (IndexAdd): B x N x kB
     --   (Transpose): B x kB x N
     --   (View): (B*kB) x N
-    -- out: idk
+    -- out: (B*kB) x N
     local cos_dist = nn.MM(false, true)({batch_g, batch_f})
     local unbatch = nn.View(-1, n_set)(nn.Transpose({2,3})(cos_dist))
     local set_probs = nn.SoftMax()(unbatch)
     local class_probs = set_probs
     if opt.prototypes ~= 1 then
         local rebatch = nn.Transpose({2,3})(
-            nn.View(-1, opt.kB, n_set)(attn_scores))
+            nn.View(-1, opt.kB, n_set)(class_probs))
         class_probs = nn.View(-1, opt.N)(nn.Transpose({2,3})(
             nn.IndexAdd(1, opt.N)({rebatch, inputs[3]})))
     end
@@ -237,6 +246,7 @@ function MatchingNetwork:train(log_fh)
         end
     end
 
+
     --[[ Training Loop ]]--
     local timer = torch.Timer()
     local last_score = self:evaluate("val")
@@ -258,6 +268,10 @@ function MatchingNetwork:train(log_fh)
             for i = 1, tr_data.n_batches do
                 local episode = tr_data[i]
                 inputs, targs = episode[1], episode[2]
+                if opt.init_fce ~= '' then
+                    table.insert(inputs, self.c_0)
+                    table.insert(inputs, self.h_0)
+                end
                 optimize(feval, params, optim_state)
             end
             if shard_n % (10/opt.print_freq) == 0 then
@@ -330,6 +344,10 @@ function MatchingNetwork:evaluate(split)
         for i = 1, sp_data.n_batches do
             local episode = sp_data[i]
             inputs, targs = episode[1], episode[2]
+            if opt.init_fce ~= '' then
+                table.insert(inputs, self.c_0)
+                table.insert(inputs, self.h_0)
+            end
             local outputs = model:forward(inputs)
             maxes, preds = torch.max(outputs, 2)
             if opt.gpuid > 0 then

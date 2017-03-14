@@ -20,6 +20,7 @@ require 'IndexAdd'
 
 require 'Log2'
 require 'Normalize2'
+require 'MM2'
 
 require 'nngraph'
 require 'hdf5'
@@ -61,6 +62,7 @@ cmd:option('--save_params_to', '', 'file to save weights to')
 cmd:option('--share_embed', 1, '1 if share parameters between embedding functions')
 cmd:option('--prototypes', 0, '1 if use class prototypes')
 cmd:option('--contextual_embed','', 'type of parameters to add after embedding functions')
+cmd:option('--init_fce','zero', 'how to initialize FCE hidden state and cells')
 cmd:option('--L',5, 'number of rollout steps for FCE')
 cmd:option('--ini_fce','zero', 'initialization for FCE hidden state and cells')
 cmd:option('--bn_eps', 1e-3, 'epsilson constant for batch normalization')
