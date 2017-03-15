@@ -59,21 +59,25 @@ cmd:option('--init_scale', .05, 'scale of initial parameters')
 cmd:option('--init_dist', 'uniform', 'distribution to draw initial parameters')
 cmd:option('--load_params_from', '', 'file to load weights from')
 cmd:option('--save_params_to', '', 'file to save weights to')
+cmd:option('--embedding_fn', 'cnn', 'type of embedding function to use')
 cmd:option('--share_embed', 1, '1 if share parameters between embedding functions')
 cmd:option('--prototypes', 0, '1 if use class prototypes')
-cmd:option('--contextual_embed','', 'type of parameters to add after embedding functions')
+cmd:option('--contextual_f','', 'type of parameters to add after embedding functions')
+cmd:option('--contextual_g','', 'type of parameters to add after embedding functions')
 cmd:option('--init_fce','zero', 'how to initialize FCE hidden state and cells')
 cmd:option('--L',5, 'number of rollout steps for FCE')
-cmd:option('--ini_fce','zero', 'initialization for FCE hidden state and cells')
 cmd:option('--bn_eps', 1e-3, 'epsilson constant for batch normalization')
 cmd:option('--bn_momentum', 0.1, 'momentum term in batch normalization')
 cmd:option('--bn_affine', true, 'affine parameters in batch normalization')
+
+cmd:option('--d_emb', 100, 'word vector dimension or number of convolutional filters')
+cmd:option('--pretrain_file', '', 'path to pretrained embeddings')
+
 
 -- CNN options --
 cmd:option('--n_channels', 1, 'number of initial image channels')
 cmd:option('--im_dim', 64, 'image dimensions (assuming square)')
 cmd:option('--n_modules', 4, 'number of convolutional units to stack')
-cmd:option('--n_kernels', 64, 'number of convolutional filters')
 cmd:option('--kernel_sizes', '3,3,3,3', 'sizes of convolutional filters')
 cmd:option('--nonlinearity', 'relu', 'nonlinearity to use')
 cmd:option('--pool_ceil', 0, '1 if ceil in pooling dimension, else floor')
@@ -127,6 +131,10 @@ function main()
     opt.k = f:read('k'):all()[1]
     opt.N = f:read('N'):all()[1]
     opt.kB = f:read('kB'):all()[1]
+    if opt.embedding_fn ~= 'cnn' then
+        opt.vocab_size = f:read('vocab_size'):all()[1]
+        opt.seq_len = f:read('seq_len'):all()[1]
+    end
     if opt.model == 'baseline' then
         opt.n_classes = f:read('n_classes'):all()[1]
     end

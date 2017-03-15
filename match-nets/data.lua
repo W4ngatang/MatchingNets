@@ -9,11 +9,16 @@ function Data:__init(opt, datasets)
     self.gpuid = opt.gpuid
     self.xs = datasets[1]
     self.ys = datasets[2]:long()
-    self.n_channels = opt.n_channels
-    self.im_dim = opt.im_dim
-    assert(self.xs:size()[3] == self.n_channels, 'only 1d layer supported')
-    assert(self.xs:size()[4] == self.im_dim, 'only 1d layer supported')
-    assert(self.xs:size()[5] == self.im_dim, 'only 1d layer supported')
+    self.embedding_fn = opt.embedding_fn
+    if opt.embedding_fn == 'cnn' then -- would be clearer just to ResizeAs
+        self.n_channels = opt.n_channels
+        self.im_dim = opt.im_dim
+        assert(self.xs:size()[3] == self.n_channels, 'only 1d layer supported')
+        assert(self.xs:size()[4] == self.im_dim, 'only 1d layer supported')
+        assert(self.xs:size()[5] == self.im_dim, 'only 1d layer supported')
+    else
+        self.seq_len = opt.seq_len
+    end
     self.k = opt.k 
     self.N = opt.N 
     self.kB = opt.kB 
@@ -41,9 +46,15 @@ function Data.__index(self,idx)
         local p_idx = self.perm[idx] -- shuffle batch order
         local meta_xs = self.xs:narrow(1,(p_idx-1)*B+1,B)
         local meta_ys = self.ys:narrow(1,(p_idx-1)*B+1,B)
-        local set_xs = torch.zeros(B*set_size, n_channels, im_dim, im_dim)
+        local set_xs, bat_xs
+        if self.embedding_fn == 'cnn' then
+            set_xs = torch.zeros(B*set_size, n_channels, im_dim, im_dim)
+            bat_xs = torch.zeros(B*bat_size, n_channels, im_dim, im_dim)
+        else
+            set_xs = torch.zeros(B*set_size, opt.seq_len)
+            bat_xs = torch.zeros(B*bat_size, opt.seq_len)
+        end
         local set_ys = torch.zeros(B,set_size):long()
-        local bat_xs = torch.zeros(B*bat_size, n_channels, im_dim, im_dim)
         local bat_ys = torch.zeros(B*bat_size):long() -- one-dim tensor for easy evaluation
 
         for i=1,B do -- shuffle within episode

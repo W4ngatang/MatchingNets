@@ -9,7 +9,7 @@ local dbg = require 'debugger'
 
 function make_fce_g(opt)
     local inputs = {nn.Identity()()} -- set embs; B x n_set x n_kern
-    local hs = nn.SeqBRNN(opt.n_kernels, opt.n_kernels, true)(inputs[1])
+    local hs = nn.SeqBRNN(opt.d_emb, opt.d_emb, true)(inputs[1])
     local gs = nn.CAddTable()({hs, inputs[1]})
     local outputs = {gs}
     return nn.gModule(inputs, outputs)
@@ -23,7 +23,7 @@ function make_fce_f(opt, n_set)
     table.insert(inputs, nn.Identity()()) -- h_0; (B*kB) x (2*n_kern) 
 
     -- (B*kB) x n_kern
-    local reshaped_x = nn.View(-1, opt.n_kernels)(inputs[1])
+    local reshaped_x = nn.View(-1, opt.d_emb)(inputs[1])
 
     local prev_c, prev_hid, next_c, next_h, next_hid
     for l = 1, opt.L do -- L is the number of processing steps
@@ -39,15 +39,15 @@ function make_fce_f(opt, n_set)
 
         -- do all the linear transforms at once
         -- out: (B*kB) x 4*n_kern
-        local i2h = nn.Linear(opt.n_kernels, 4*opt.n_kernels)(reshaped_x)
-        local h2h = nn.Linear(2*opt.n_kernels, 4*opt.n_kernels, false)(
+        local i2h = nn.Linear(opt.d_emb, 4*opt.d_emb)(reshaped_x)
+        local h2h = nn.Linear(2*opt.d_emb, 4*opt.d_emb, false)(
             prev_hid)
         local linear = nn.CAddTable()({i2h, h2h})
 
         -- split into the four different linear layers
         -- Reshape: (B*kB) x 4 x n_kern
         -- SplitTable: 4 x (B*kB) x n_kern
-        local reshaped_linear = nn.Reshape(4, opt.n_kernels)(linear) 
+        local reshaped_linear = nn.Reshape(4, opt.d_emb)(linear) 
         local n1, n2, n3, n4 = nn.SplitTable(2)(reshaped_linear):split(4)
         local in_gate = nn.Sigmoid()(n1)
         local forget_gate = nn.Sigmoid()(n2)
@@ -74,12 +74,12 @@ function make_fce_f(opt, n_set)
             --     Transpose: kB x B x n_set x n_kern
             --     Reshape: (B*kB) x n_set x n_kern
             -- next_hid: (B*kB) x 2*n_kern
-            local reshape_h = nn.View(-1, opt.kB, opt.n_kernels)(next_h)
+            local reshape_h = nn.View(-1, opt.kB, opt.d_emb)(next_h)
             local attn_scores = nn.SoftMax()(nn.View(-1, n_set)(
                 nn.MM(false, true)({
                 reshape_h, inputs[2]}))) -- inputs[2]: B x n_set x n_kern
             local attn_vec = nn.MM({true, false})({
-                nn.Reshape(opt.kB*opt.batch_size, n_set, opt.n_kernels)(
+                nn.Reshape(opt.kB*opt.batch_size, n_set, opt.d_emb)(
                 nn.Transpose({1,2})(
                 nn.Replicate(opt.kB, 1, 2)(inputs[2]))),
                 nn.Unsqueeze(3)(attn_scores)})
@@ -87,12 +87,41 @@ function make_fce_f(opt, n_set)
                 next_h, attn_vec})
         end
     end
-    local outputs = {nn.Reshape(opt.batch_size, opt.kB, opt.n_kernels)(next_h)}
+    local outputs = {nn.Reshape(opt.batch_size, opt.kB, opt.d_emb)(next_h)}
+    return nn.gModule(inputs, outputs)
+end
+
+function make_bow(opt)
+    local inputs = {nn.Identity()()} -- B*kB x seq_len
+    local embs = nn.LookupTable(opt.vocab_size, opt.d_emb)(inputs[1])
+    if opt.pretrain_file ~= '' then
+        local f = hdf5.open(opt.data_folder .. 'embs.hdf5', 'r')
+        local weights = f:read('embs'):all()
+        assert(weights:size()[2] == opt.d_emb)
+        embs.weight = weights
+    end
+    local BoWs = nn.Mean(2)(embs)
+    local outputs = {BoWs} -- B*kB x d_emb
+    return nn.gModule(inputs, outputs)
+end
+
+function make_lstm(opt)
+    local inputs = {nn.Identity()()} -- B*kB x seq_len
+    local embs = nn.LookupTable(opt.vocab_size, opt.d_emb)(inputs[1])
+    if opt.pretrain_file ~= '' then
+        local f = hdf5.open(opt.data_folder .. 'embs.hdf5', 'r')
+        local weights = f:read('embs'):all()
+        embs.weight = weights
+    end
+    local lstm = nn.SeqLSTM(opt.d_emb, opt.d_emb)
+    lstm.batchfirst = true
+    local sent_emb = nn.SelectTable(-1)(nn.SplitTable(2)(lstm(embs)))
+    local outputs = {sent_emb} -- B*kb x d_emb
     return nn.gModule(inputs, outputs)
 end
 
 function make_cnn(opt)
-    local input = nn.Identity()()
+    local input = {nn.Identity()()}
     local layers = {}
     local kernel_sizes = (opt.kernel_sizes):split(',')
     assert(#kernel_sizes == opt.n_modules)
@@ -105,13 +134,13 @@ function make_cnn(opt)
             conv_module.name = 'cnn' .. i
             table.insert(layers, conv_module(input))
         else
-            local conv_module = make_cnn_module(opt, opt.n_kernels, kernel_sizes[i])
+            local conv_module = make_cnn_module(opt, opt.d_emb, kernel_sizes[i])
             conv_module.name = 'cnn' .. i
             table.insert(layers, conv_module(layers[i-1]))
         end
     end
-    local output = layers[opt.n_modules]
-    return nn.gModule({input}, {output})
+    local output = {nn.Squeeze()(layers[opt.n_modules])}
+    return nn.gModule(input, output)
 end
 
 function make_cnn_module(opt, n_input_feats, kernel_size)
@@ -129,30 +158,30 @@ function make_cnn_module(opt, n_input_feats, kernel_size)
         nonlinearity = nn.Tanh()
     end
 
-    local output
-    local input = nn.Identity()() -- double () denotes nngraph module
+    local input = {nn.Identity()()}
+    local output = {}
     if opt.gpuid > 0 and opt.cudnn == 1 then
         -- 1 is the number of input channels since b&w
         -- conv height and width change every layer
-        local conv_layer = cudnn.SpatialConvolution(n_input_feats, opt.n_kernels, 
+        local conv_layer = cudnn.SpatialConvolution(n_input_feats, opt.d_emb, 
             conv_w, conv_h, 1, 1, pad_w, pad_h)(input)
-        local norm_layer = nn.SpatialBatchNormalization(opt.n_kernels, opt.bn_eps, opt.bn_momentum, opt.bn_affine)(conv_layer)
+        local norm_layer = nn.SpatialBatchNormalization(opt.d_emb, opt.bn_eps, opt.bn_momentum, opt.bn_affine)(conv_layer)
         local pool_layer = cudnn.SpatialMaxPooling(
             pool_w, pool_h, pool_w, pool_h, opt.pool_pad, opt.pool_pad)
         if opt.pool_ceil == 1 then
             pool_layer:ceil()
         end
-        output = pool_layer(nn.Tanh()(norm_layer))
+        table.insert(output, pool_layer(nn.Tanh()(norm_layer)))
     else
-        local conv_layer = nn.SpatialConvolution(n_input_feats, opt.n_kernels,
+        local conv_layer = nn.SpatialConvolution(n_input_feats, opt.d_emb,
             conv_w, conv_h, 1, 1, pad_w, pad_h)(input)
-        local norm_layer = nn.SpatialBatchNormalization(opt.n_kernels, opt.bn_eps, opt.bn_momentum, opt.bn_affine)(conv_layer)
+        local norm_layer = nn.SpatialBatchNormalization(opt.d_emb, opt.bn_eps, opt.bn_momentum, opt.bn_affine)(conv_layer)
         local pool_layer = nn.SpatialMaxPooling(
             pool_w, pool_h, pool_w, pool_h, opt.pool_pad, opt.pool_pad)
         if opt.pool_ceil == 1 then
             pool_layer:ceil()
         end
-        output = pool_layer(nn.ReLU()(norm_layer))
+        table.insert(output, pool_layer(nn.ReLU()(norm_layer)))
     end
-    return nn.gModule({input},{output})
+    return nn.gModule(input, output)
 end
