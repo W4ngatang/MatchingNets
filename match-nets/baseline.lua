@@ -15,33 +15,41 @@ function Baseline:__init(opt, log_fh)
     table.insert(inputs, nn.Identity()()) -- hat(x): B x im x im
 
     -- in: B x im x im
-    --   unsqueeze -> B x 1 x im x im
-    --   f -> B x 64 x 1 x 1
-    --   squeeze -> B x 64
+    --   f -> B x d_emb
     --   linear -> B x n_classes
-    --   LSM -> B x n_classes
+    --   tanh -> B x n_classes
     -- out: B x n_classes
-    local f = make_cnn(opt)
-    local embed_f = nn.Squeeze()(f(nn.Unsqueeze(2)(inputs[1])))
-    local linear = nn.Linear(opt.n_kernels, opt.n_classes)(embed_f)
-    local outputs = {linear}
+    local f
+    if opt.embedding_fn == 'cnn' then
+        f = make_cnn(opt)
+    elseif opt.embedding_fn == 'bow' then
+        f, self.word_embs = make_bow(opt)
+    elseif opt.embedding_fn == 'lstm' then
+        f, self.word_embs = make_lstm(opt)
+    else
+        f = nn.View(-1, opt.d_emb)
+    end
+    local embed_f = f(inputs[1])
+    local norm_f = nn.Normalize(2)(embed_f)
+    local linear = nn.Linear(opt.d_emb, opt.n_classes, false)(norm_f)
+    local activation = nn.Tanh()(linear)
+    local outputs = {activation}
     local crit = nn.CrossEntropyCriterion()
     local model = nn.gModule(inputs, outputs)
     if opt.gpuid > 0 then
         model = model:cuda()
         crit = crit:cuda()
     end
+    self.embed = f --nn.gModule(inputs, {embed_f})
     self.model = model
     self.crit = crit
     self.opt = opt
-    self.log_fh = log_fh
 end
 
-function Baseline:train()
+function Baseline:train(log_fh)
     local model = self.model
     local crit = self.crit
     local opt = self.opt
-    local log_fh = self.log_fh
 
     --[[ Parameter Init ]]--
     params, grad_params = model:getParameters()
@@ -126,8 +134,12 @@ function Baseline:train()
     local timer = torch.Timer()
     local last_score = self:evaluate("val")
     local best_score = last_score
-    local best_params = params:clone()
     log(log_fh, "\tInitial validation accuracy: " .. last_score)
+    if opt.save_model_to ~= '' then
+        torch.save(opt.save_model_to, self)
+        log(log_fh, "\tSaved model to " .. opt.save_model_to .. " in ".. timer:time().real .. " seconds")
+    end
+
     for epoch = 1, opt.n_epochs do
         model:training()
         log(log_fh, "Epoch " ..epoch)
@@ -142,6 +154,9 @@ function Baseline:train()
             local tr_outs = f:read('outs'):all()
             local tr_data = DataBaseline(opt, {tr_ins, tr_outs})
             for i = 1, tr_data.n_batches do
+                if opt.embedding_fn == 'bow' or opt.embedding_fn == 'lstm' then
+                    self.word_embs[1]:zero()
+                end
                 local episode = tr_data[i]
                 inputs, targs = episode[1], episode[2]
                 optimize(feval, params, optim_state)
@@ -169,24 +184,25 @@ function Baseline:train()
             log(log_fh, "\tLearning rate decayed to " .. optim_state['learningRate'])
         end
         if val_score > best_score then
+            if opt.save_model_to ~= '' then
+                timer:reset()
+                torch.save(opt.save_model_to, self)
+                log(log_fh, "\tSaved model to " .. opt.save_model_to .. " in ".. timer:time().real .. " seconds")
+            end
             best_score = val_score
-            best_params:copy(params)
         end
         last_score = val_score
         log(log_fh, "\tLoss: " .. total_loss/n_batches .. ", training accuracy: " .. n_correct/n_preds .. ", Validation accuracy: " .. val_score .. ", Best accuracy: " .. best_score)
     end
-    params:copy(best_params)
-    print("Best validation accuracy: " .. self:evaluate("val"))
 
 end
 
 function Baseline:evaluate(split, fh)
-    local model = self.model
+    local model = self.embed --self.model
     local crit = self.crit
     local opt = self.opt
-    local log_fh = self.log_fh
 
-    if opt.predfile ~= nil and split == 'te' then
+    if opt.predfile ~= '' and split == 'te' then
         pred_fh = io.open(opt.predfile,"w")
         pred_fh:write("Prediction, Target\n")
     end
@@ -202,6 +218,10 @@ function Baseline:evaluate(split, fh)
     end
 
     local preds = torch.zeros(opt.batch_size*opt.kB)
+    local softmax = nn.SoftMax()
+    if opt.gpuid > 0 then
+        softmax = softmax:cuda()
+    end
 
     for shard_n = 1, n_shards do 
         local f = hdf5.open(opt.data_folder .. str_split .. shard_n .. '.hdf5', 'r')
@@ -212,20 +232,34 @@ function Baseline:evaluate(split, fh)
         for i = 1, sp_data.n_batches do
             local episode = sp_data[i]
             inputs, targs = episode[1], episode[2]
-            local bat_embs = torch.reshape(model:forward(inputs[1]), opt.batch_size, opt.kB, opt.n_classes)
-            local set_embs = torch.reshape(model:forward(inputs[2]), opt.batch_size, opt.N*opt.k, opt.n_classes)
-            local sim_scores = torch.zeros(opt.batch_size, opt.kB, opt.N*opt.k)
+            local bat_embs = torch.reshape(torch.renorm(model:forward(inputs[1]), 2,1,1), opt.batch_size, opt.kB, opt.d_emb) -- B x kB x n_classes
+            local set_embs = torch.reshape(torch.renorm(model:forward(inputs[2]), 2,1,1),opt.batch_size, opt.N*opt.k, opt.d_emb) -- B x n_set x n_classes
+            -- B x kB x n_set
+            local logits = torch.zeros(opt.batch_size, opt.kB, opt.N*opt.k)
+            local class_probs = torch.zeros(opt.batch_size, opt.kB, opt.N)
             if opt.gpuid > 0 then
-                sim_scores = sim_scores:cuda()
+                logits = logits:cuda()
+                class_probs = class_probs:cuda()
             end
-            sim_scores:baddbmm(bat_embs, set_embs:transpose(2,3))
-            local unbatch = torch.reshape(sim_scores, opt.batch_size*opt.kB, opt.N*opt.k)
+            logits:baddbmm(bat_embs, set_embs:transpose(2,3))
+            -- B x kB x n_set
+            local unbatch = torch.reshape(logits, opt.batch_size*opt.kB, opt.N*opt.k)
+            local probs = softmax:forward(unbatch)
+            local rebatch = torch.reshape(probs, opt.batch_size, opt.kB, opt.N*opt.k)
+            for j = 1, opt.batch_size do
+                class_probs[j]:indexAdd(2, inputs[3][j], rebatch[j])
+            end
+            local maxes, preds = torch.max(
+                torch.reshape(class_probs, opt.batch_size*opt.kB, opt.N), 2)
+
+            --[[
             local maxes, inds = torch.max(unbatch, 2)
-            for i=1, inputs[3]:size(1) do -- should probably assert sizes
-                for j=1,opt.kB do
-                    preds[(i-1)*opt.kB+j] = inputs[3][i][inds[(i-1)*opt.kB+j][1]]
+            for a=1, inputs[3]:size(1) do -- should probably assert sizes
+                for b=1,opt.kB do
+                    preds[(a-1)*opt.kB+b] = inputs[3][a][inds[(a-1)*opt.kB+b][1]
                 end
             end
+            ]]--
                 
             if opt.gpuid > 0 then
                 preds = preds:cuda()

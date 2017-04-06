@@ -1,6 +1,6 @@
 require 'torch'
 require 'nn'
-require 'rnn' -- TODO dependent import?
+require 'rnn'
 require 'optim'
 require 'graph'
 require 'pl'
@@ -96,6 +96,7 @@ cmd:option('--rho', .95, 'Adadelta interpolation parameter')
 cmd:option('--beta1', .9, 'Adam beta1 parameter')
 cmd:option('--beta2', .999, 'Adam beta2 parameter')
 cmd:option('--batch_size', 1, 'number of episodes per batch')
+cmd:option('--baseline_batch_size', 25, 'number of episodes per batch for baseline model')
 cmd:option('--max_grad_norm', 0, 'maximum gradient value')
 
 cmd:option('--debug', 0, '1 if stop for debug after n epochs')
@@ -131,9 +132,11 @@ function main()
     opt.k = f:read('k'):all()[1]
     opt.N = f:read('N'):all()[1]
     opt.kB = f:read('kB'):all()[1]
-    if opt.embedding_fn ~= 'cnn' then
+    if opt.embedding_fn == 'bow' or opt.embedding_fn == 'lstm' then
         opt.vocab_size = f:read('vocab_size'):all()[1]
         opt.seq_len = f:read('seq_len'):all()[1]
+    elseif opt.embedding_fn == 'none' then
+        opt.d_emb = f:read('n_feats'):all()[1]
     end
     if opt.model == 'baseline' then
         opt.n_classes = f:read('n_classes'):all()[1]
@@ -141,15 +144,14 @@ function main()
     log(log_fh, '\tTraining with ' .. opt.n_tr_shards .. ' shards...')
 
     log(log_fh, 'Building model...')
-    if opt.model == 'matching-net' then
-        model = MatchingNetwork(opt, log_fh)
-    elseif opt.model == 'baseline' then
-        model = Baseline(opt, log_fh)
-    end
     if opt.load_model_from ~= '' then
-        model.model = nil
-        collectgarbage()
-        model.model = torch.load(opt.load_model_from)
+        model = torch.load(opt.load_model_from)
+    else
+        if opt.model == 'matching-net' then
+            model = MatchingNetwork(opt, log_fh)
+        elseif opt.model == 'baseline' then
+            model = Baseline(opt, log_fh)
+        end
     end
     log(log_fh, '\tModel built!')
     collectgarbage()
@@ -161,11 +163,11 @@ function main()
 
     -- evaluate
     if opt.save_model_to ~= '' then
-        model.model = nil
+        model = nil
         collectgarbage()
-        model.model = torch.load(opt.save_model_to)
+        model = torch.load(opt.save_model_to)
     end
-    log(log_fh, "Best validation score: " .. model:evaluate("val"))
+    log(log_fh, "Best validation accuracy: " .. model:evaluate("val"))
     log(log_fh, "Test accuracy: " .. model:evaluate("te"))
 
     -- cleanup

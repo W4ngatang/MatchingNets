@@ -32,11 +32,14 @@ function MatchingNetwork:__init(opt, log_fh)
         f = make_cnn(opt)
         g = make_cnn(opt)
     elseif opt.embedding_fn == 'bow' then
-        f = make_bow(opt)
-        g = make_bow(opt)
+        f, self.word_embs = make_bow(opt)
+        g, self.word_embs = make_bow(opt)
     elseif opt.embedding_fn == 'lstm' then
-        f = make_lstm(opt)
-        g = make_lstm(opt)
+        f, self.word_embs = make_lstm(opt)
+        g, self.word_embs = make_lstm(opt)
+    else
+        f = nn.View(-1, opt.d_emb)
+        g = nn.View(-1, opt.d_emb)
     end
     if opt.share_embed == 1 then
         log(log_fh, '\tTying embedding function parameters...')
@@ -45,7 +48,6 @@ function MatchingNetwork:__init(opt, log_fh)
         g:share(f, 'gradWeight')
         g:share(f, 'gradBias')
     end
-
     local embed_f = f(inputs[1])
     local norm_f = nn.Normalize(2)(embed_f)
     local batch_f = nn.View(-1, opt.kB, opt.d_emb)(norm_f)
@@ -55,27 +57,26 @@ function MatchingNetwork:__init(opt, log_fh)
 
     -- Class prototypes
     -- in: B x n_set x n_kern
-    --   IndexAdd: B x N x n_kern
+    --   IndexAdd: B x N x n_kern (we don't divide by k b/c we normalize later)
     --   View: B*N x n_kern
     --   Normalize: B*N x n_kern
     --   View: B x N x n_kern
     -- out: B x n_set x n_kern
     if opt.prototypes == 1 then
         log(log_fh, '\tUsing prototypes...')
-        -- don't need to average because of normalization
+        n_set = opt.N
         prototypes = nn.IndexAdd(1, opt.N)({batch_g, inputs[3]})
         batch_g = nn.View(-1, n_set, opt.d_emb)(
             nn.Normalize(2)(nn.View(-1, opt.d_emb)(prototypes)))
-        n_set = opt.N
     end
+    opt.n_set = n_set
 
     -- Contextual embeddings: parameters after embedding
     -- in:(B x kB x n_kern) , (B x n_set x n_kern)
     -- out: (B x kB x n_kern), (B x n_set x n_kern)
+    local fce_f, fce_g, h_0, c_0
     if opt.contextual_f == 'fce' then
         log(log_fh, '\tUsing full context embeddings for f...')
-
-        local h_0, c_0
         if opt.init_fce == 'zero' then
             h_0 = torch.zeros(opt.batch_size*opt.kB, 2*opt.d_emb)
             c_0 = torch.zeros(opt.batch_size*opt.kB, opt.d_emb)
@@ -90,32 +91,19 @@ function MatchingNetwork:__init(opt, log_fh)
         self.h_0 = h_0
         self.c_0 = c_0
 
-        local fce_f = make_fce_f(opt, n_set)
+        fce_f = make_fce_f(opt, n_set)
         batch_f = fce_f({batch_f, batch_g, inputs[4], inputs[5]})
     end
 
     if opt.contextual_g == 'simple' then
-        -- TODO redo this
         log(log_fh, '\tUsing simple contextual embeddings for g...')
-        -- view: B * (N*k*kB) * d)
-        repeat_batch = nn.Replicate(n_set, 2, 2)(batch_f)
-        rebatch_batch = nn.View(-1, opt.N*opt.k*opt.kB, opt.n_kernels)(nn.Contiguous()(repeat_batch))
-
-        -- view: B * (N*k*kB) * d)
-        repeat_set = nn.Replicate(opt.kB, 1, 2)(batch_g)
-        rebatch_set = nn.View(-1, n_set*opt.kB, opt.n_kernels)(nn.Contiguous()(repeat_set))
-        concat = nn.JoinTable(2)({rebatch_batch, rebatch_set})
-        reshape = nn.View(-1, 2*opt.n_kernels)(nn.Transpose({2,3})(concat))
-        w1 = nn.Linear(2*opt.n_kernels, opt.n_kernels)(reshape)
-        nonlinearity = nn.Tanh()(w1)
-        w2 = nn.Linear(opt.n_kernels, 1)(nonlinearity)
-        unbatch = nn.View(-1, n_set)(w2)
+        fce_g = make_simple_fce_g(opt)
+        batch_g = fce_g({batch_f, batch_g})
     elseif opt.contextual_g == 'fce' then
         log(log_fh, '\tUsing full context embeddings for g...')
-        local fce_g = make_fce_g(opt)
+        fce_g = make_fce_g(opt)
         batch_g = fce_g({batch_g})
     end
-
 
     -- in:(B x kB x n_kern) , (B x n_set x n_kern)
     --   MM:: B x n_set x kB
@@ -128,7 +116,7 @@ function MatchingNetwork:__init(opt, log_fh)
     --   (Transpose): B x kB x N
     --   (View): (B*kB) x N
     -- out: (B*kB) x N
-    local cos_dist = nn.MM(false, true)({batch_g, batch_f})
+    local cos_dist = nn.MM2(false, true)({batch_g, batch_f})
     local unbatch = nn.View(-1, n_set)(nn.Transpose({2,3})(cos_dist))
     local set_probs = nn.SoftMax()(unbatch)
     local class_probs = set_probs
@@ -257,6 +245,12 @@ function MatchingNetwork:train(log_fh)
     local last_score = self:evaluate("val")
     local best_score = last_score
     log(log_fh, "\tInitial validation accuracy: " .. last_score)
+    if opt.save_model_to ~= '' then
+        timer:reset()
+        torch.save(opt.save_model_to, self)
+        log(log_fh, "\tSaved model to " .. opt.save_model_to .. " in ".. timer:time().real .. " seconds")
+    end
+
     for epoch = 1, opt.n_epochs do
         model:training()
         log(log_fh, "Epoch " ..epoch)
@@ -271,6 +265,9 @@ function MatchingNetwork:train(log_fh)
             local tr_outs = f:read('outs'):all()
             local tr_data = Data(opt, {tr_ins, tr_outs})
             for i = 1, tr_data.n_batches do
+                if opt.embedding_fn == 'bow' or opt.embedding_fn == 'lstm' then
+                    self.word_embs[1]:zero() -- corresponds to <blank>
+                end
                 local episode = tr_data[i]
                 inputs, targs = episode[1], episode[2]
                 if opt.contextual_f == 'fce' then
@@ -300,7 +297,7 @@ function MatchingNetwork:train(log_fh)
         if val_score > best_score then
             if opt.save_model_to ~= '' then
                 timer:reset()
-                torch.save(opt.save_model_to, model)
+                torch.save(opt.save_model_to, self)
                 log(log_fh, "\tSaved model to " .. opt.save_model_to .. " in ".. timer:time().real .. " seconds")
             end
             best_score = val_score
@@ -324,9 +321,8 @@ function MatchingNetwork:evaluate(split)
     local model = self.model
     local crit = self.crit
     local opt = self.opt
-    local log_fh = self.log_fh
 
-    if opt.predfile ~= nil and split == 'te' then
+    if opt.predfile ~= '' and split == 'te' then
         pred_fh = io.open(opt.predfile,"w")
         pred_fh:write("Prediction, Target\n")
     end

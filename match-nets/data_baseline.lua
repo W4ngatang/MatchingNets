@@ -19,7 +19,7 @@ function DataBaseline:__init(opt, datasets)
     self.k = opt.k 
     self.N = opt.N 
     self.kB = opt.kB 
-    self.batch_size = opt.batch_size
+    self.batch_size = opt.baseline_batch_size
     self.n_episodes = self.xs:size(1)
     self.n_batches = self.n_episodes / self.batch_size
     self.batch_inputs = torch.DoubleTensor()

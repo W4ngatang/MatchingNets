@@ -7,7 +7,7 @@ local Data = torch.class("Data")
 
 function Data:__init(opt, datasets)
     self.gpuid = opt.gpuid
-    self.xs = datasets[1]
+    self.xs = datasets[1] -- might need to truncate data
     self.ys = datasets[2]:long()
     self.embedding_fn = opt.embedding_fn
     if opt.embedding_fn == 'cnn' then -- would be clearer just to ResizeAs
@@ -50,16 +50,19 @@ function Data.__index(self,idx)
         if self.embedding_fn == 'cnn' then
             set_xs = torch.zeros(B*set_size, n_channels, im_dim, im_dim)
             bat_xs = torch.zeros(B*bat_size, n_channels, im_dim, im_dim)
+        elseif self.embedding_fn == 'bow' or self.embedding_fn == 'lstm' then
+            set_xs = torch.zeros(B*set_size, opt.seq_len):double()
+            bat_xs = torch.zeros(B*bat_size, opt.seq_len):double()
         else
-            set_xs = torch.zeros(B*set_size, opt.seq_len)
-            bat_xs = torch.zeros(B*bat_size, opt.seq_len)
+            set_xs = torch.zeros(B*set_size, opt.d_emb)
+            bat_xs = torch.zeros(B*bat_size, opt.d_emb)
         end
         local set_ys = torch.zeros(B,set_size):long()
         local bat_ys = torch.zeros(B*bat_size):long() -- one-dim tensor for easy evaluation
 
         for i=1,B do -- shuffle within episode
-            --shuffle = torch.randperm(set_size):long()
-            shuffle = torch.range(1,set_size):long() 
+            shuffle = torch.randperm(set_size):long()
+            --shuffle = torch.range(1,set_size):long() 
             set_xs:narrow(1,(i-1)*set_size+1,set_size):index(meta_xs[i]:narrow(1,1,set_size),1,shuffle)
             set_ys[i]:index(meta_ys[i]:narrow(1,1,set_size),1,shuffle)
 

@@ -6,7 +6,6 @@ from scipy.misc import imread, imresize
 import h5py
 import pdb
 
-n_ex_per_class = 20
 counter = 0
 total = 0
 
@@ -58,7 +57,7 @@ def load_data(path, split=1):
         n_classes = 0
         for alphabet in alphabets:
             n_classes += len(os.listdir(path + '/' + alphabet))
-        data = np.zeros((n_classes, n_ex_per_class, args.n_channels, args.im_dim, args.im_dim))
+        data = np.zeros((n_classes, args.n_ex_per_class, args.n_channels, args.im_dim, args.im_dim))
         print '\t%d classes to load' % n_classes
         
         count = 0
@@ -80,15 +79,12 @@ def load_data(path, split=1):
     return data, n_classes
 
 def augment(data):
-    try:
-        n_data = data.shape[0]
-        augmented = np.zeros((n_data*4, n_ex_per_class, args.n_channels, args.im_dim, args.im_dim))
-        for i, char in enumerate(data):
-            for j,ex in enumerate(char):
-                for k in xrange(4):
-                    augmented[k*n_data+i, j,] = np.rot90(ex.transpose([2,1,0]), k).transpose([2,1,0])
-    except Exception as e:
-        pdb.set_trace()
+    n_data = data.shape[0]
+    augmented = np.zeros((n_data*4, args.n_ex_per_class, args.n_channels, args.im_dim, args.im_dim))
+    for i, char in enumerate(data):
+        for j,ex in enumerate(char[:args.n_ex_per_class]):
+            for k in xrange(4):
+                augmented[k*n_data+i, j,] = np.rot90(ex.transpose([2,1,0]), k).transpose([2,1,0])
     return augmented
 
 '''
@@ -101,7 +97,7 @@ Data will be arranged as follows: n_episodes x (N*k + kb) x im_size x im_size
 [ episode N ]
 
 '''
-def create_oneshot_episodes(data, n_episodes):
+def create_oneshot_episodes(data, n_episodes, n_ex_per_class=20):
     try:
         k, kB = args.k, args.kB
         n_classes = data.shape[0] 
@@ -113,7 +109,10 @@ def create_oneshot_episodes(data, n_episodes):
         # then for each class sample k+kB examples
         for i in xrange(n_episodes):
             episode_classes = np.random.choice(n_classes, args.N, replace=False)
-            batch_examples = np.random.multinomial(kB, [1./args.N]*args.N)
+            if args.batch_examples == "random":
+                batch_examples = np.random.multinomial(kB, [1./args.N]*args.N)
+            else:
+                batch_examples = np.array([kB / args.N] * args.N)
             batch_offset = 0
             for j,(c,n) in enumerate(zip(episode_classes, batch_examples)):
                 exs = np.random.choice(n_ex_per_class, k+n, replace=False)
@@ -130,10 +129,11 @@ def create_oneshot_episodes(data, n_episodes):
 
 def create_baseline_episodes(data):
     try:
-        inputs = np.zeros((data.shape[0]*n_ex_per_class, args.im_dim, args.im_dim))
+        n_ex_per_class = args.n_ex_per_class
+        inputs = np.zeros((data.shape[0]*n_ex_per_class, args.n_channels, args.im_dim, args.im_dim))
         outputs = np.zeros((data.shape[0]*n_ex_per_class, 1))
         for j, char in enumerate(data):
-            inputs[j*n_ex_per_class:(j+1)*n_ex_per_class, :, :] = char
+            inputs[j*n_ex_per_class:(j+1)*n_ex_per_class, :, :] = char[:n_ex_per_class]
             outputs[j*n_ex_per_class:(j+1)*n_ex_per_class, :] = np.ones((n_ex_per_class, 1)) * (j+1)
         p = np.random.permutation(inputs.shape[0]) 
     except Exception as e:
@@ -141,22 +141,24 @@ def create_baseline_episodes(data):
     return inputs[p], outputs[p]
 
 def create_shards(data, n_episodes, n_shards, split):
-    if args.type == 'oneshot' or split != "tr":
-        for i in xrange(n_shards):
-            with h5py.File(args.out_path + split + "_%d.hdf5" % (i+1), 'w') as f:
-                ins, outs = create_oneshot_episodes(data, n_episodes)
-                f['ins'] = ins
-                f['outs'] = outs
-            del ins, outs
-            print '\t%d..' % (i+1)
-    else:
-        assert(args.type == 'baseline' and split == "tr")
+    if args.type == 'baseline' and split == 'tr':
         with h5py.File(args.out_path + split + "_%d.hdf5" % 1, 'w') as f:
             ins, outs = create_baseline_episodes(data)
             f['ins'] = ins
             f['outs'] = outs
         del ins, outs
         print '\t%d..' % 1
+    else:
+        for i in xrange(n_shards):
+            with h5py.File(args.out_path + split + "_%d.hdf5" % (i+1), 'w') as f:
+                if split == 'tr':
+                    ins, outs = create_oneshot_episodes(data, n_episodes, args.n_ex_per_class)
+                else:
+                    ins, outs = create_oneshot_episodes(data, n_episodes)
+                f['ins'] = ins
+                f['outs'] = outs
+            del ins, outs
+            print '\t%d..' % (i+1)
 
 def main(arguments):
     global args
@@ -173,17 +175,22 @@ def main(arguments):
     parser.add_argument('--n_val_shards', help='number of shards to split val data amongst', type=int, default=1)
     parser.add_argument('--n_te_shards', help='number of shards to split te data amongst', type=int, default=1)
     parser.add_argument('--augment', help='1 if augment with rotations', type=int, default=1)
-    parser.add_argument('--reuse_test', help='1 if resue test classes for validation', type=int, default=1)
+    parser.add_argument('--reuse_test', help='1 if resue test classes for validation', type=int, default=0)
 
     parser.add_argument('--N', help='number of unique classes per episode', type=int, default=5)
     parser.add_argument('--k', help='number of examples per class in the support set', type=int, default=1)
     parser.add_argument('--kB', help='number of examples per class in the batch', type=int, default=10) 
+    parser.add_argument('--batch_examples', help='number of examples per class in the batch', type=str, default='random') 
     parser.add_argument('--n_tr_episodes', help='number of tr episodes per shard', type=int, default=5000) # about 70s / 10k
     parser.add_argument('--n_val_episodes', help='number of val episodes per shard', type=int, default=500)
     parser.add_argument('--n_te_episodes', help='number of te episodes per shard', type=int, default=500)
     parser.add_argument('--n_tr_classes', help='number of classes (before augmentation) for training, \
             remaining classes are split evenly among validation and test', type=int, default=1200)
     
+
+    parser.add_argument('--n_ex_per_class', help='number of examples to use per training class', type=int, default=20)
+    parser.add_argument('--frac_tr_classes', help='number of training classes to actually use', type=float, default=1.)
+
     parser.add_argument('--im_dim', help='dim of image along a side', type=int, default=28)
     parser.add_argument('--n_channels', help='number of image channels', type=int, default=1)
     parser.add_argument('--thresh', help='threshold (in (0,1)) for image binarization, 0 for none', type=float, default=0.)
@@ -205,7 +212,7 @@ def main(arguments):
         eval_data, n_eval_classes = load_data(args.data_path + '/' + 'images_evaluation')
 
         n_classes = n_bg_classes + n_eval_classes
-        data = np.zeros((bg_data.shape[0]+eval_data.shape[0], n_ex_per_class, args.n_channels, args.im_dim, args.im_dim))
+        data = np.zeros((bg_data.shape[0]+eval_data.shape[0], args.n_ex_per_class, args.n_channels, args.im_dim, args.im_dim))
         data[:bg_data.shape[0]] = bg_data
         data[bg_data.shape[0]:] = eval_data
 
