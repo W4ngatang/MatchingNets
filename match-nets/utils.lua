@@ -15,7 +15,7 @@ function make_fce_g(opt)
     return nn.gModule(inputs, outputs)
 end
 
-function make_simple_fce_g(opt)
+function make_simple_fce(opt)
     local inputs = {}
     local d_emb, kB, n_set = opt.d_emb, opt.kB, opt.n_set
     table.insert(inputs, nn.Identity()()) -- test embs; B x kb x d_emb
@@ -34,7 +34,9 @@ function make_simple_fce_g(opt)
     w2 = nn.Linear(d_emb, d_emb)(nonlinear)
     unbatched = nn.View(-1, n_set, d_emb)(w2)
 
-    local outputs = {unbatched} -- B x n_set x d_emb
+    local outputs = {}
+    table.insert(outputs) -- test embs: (B*kB) x 1 x d
+    table.insert(outputs, unbatched) -- set embs: (B*kB) x n_set x d
     return nn.gModule(inputs, outputs)
 end
 
@@ -43,28 +45,41 @@ function make_fce_f(opt, n_set)
     table.insert(inputs, nn.Identity()()) -- test embs; B x kB x d_emb
     table.insert(inputs, nn.Identity()()) -- set embs; B x n_set x d_emb
     table.insert(inputs, nn.Identity()()) -- c_0; (B*kB) x d_emb
-    table.insert(inputs, nn.Identity()()) -- h_0; (B*kB) x (2*d_emb)
+    table.insert(inputs, nn.Identity()()) -- h_0; (B*kB) x d_emb
 
     -- (B*kB) x d_emb
     local reshaped_x = nn.View(-1, opt.d_emb)(inputs[1])
 
-    local prev_c, prev_hid, next_c, next_h, next_hid
+    local prev_c, prev_h = inputs[3], inputs[4]
+    local prev_h_hat
     for l = 1, opt.L do -- L is the number of processing steps
-        if l == 1 then
-            prev_c = inputs[3]
-            prev_hid = inputs[4]
-        else
-            prev_c = next_c
-            prev_hid = next_hid
-        end
-
         -- TODO dropout?
+
+        -- reshape_h: B x kB x d_emb
+        -- attn_scores: (B*kB) x n_set
+        -- attn_vec = (B*kB) x d_emb
+        --   Unsqueeze: (B*kB) x n_set x 1
+        --   Replicate: B x kB x n_set x d_emb
+        --     Transpose: kB x B x n_set x d_emb
+        --     Reshape: (B*kB) x n_set x d_emb
+        -- next_hid: (B*kB) x 2*d_emb
+        local reshape_h = nn.View(-1, opt.kB, opt.d_emb)(prev_h)
+        local attn_scores = nn.SoftMax()(nn.View(-1, n_set)(
+            nn.MM(false, true)({
+            reshape_h, inputs[2]})))
+        local attn_vec = nn.MM({true, false})({
+            nn.Reshape(opt.kB*opt.batch_size, n_set, opt.d_emb)(
+            nn.Transpose({1,2})(
+            nn.Replicate(opt.kB, 1, 2)(inputs[2]))),
+            nn.Unsqueeze(3)(attn_scores)})
+        concat_hid = nn.JoinTable(2)({
+            prev_h, attn_vec})
 
         -- do all the linear transforms at once
         -- out: (B*kB) x 4*d_emb
         local i2h = nn.Linear(opt.d_emb, 4*opt.d_emb)(reshaped_x)
         local h2h = nn.Linear(2*opt.d_emb, 4*opt.d_emb, false)(
-            prev_hid)
+            concat_hid)
         local linear = nn.CAddTable()({i2h, h2h})
 
         -- split into the four different linear layers
@@ -80,15 +95,16 @@ function make_fce_f(opt, n_set)
         -- compute next h, c
         -- next_c: (B*kB) x d_emb
         -- next_h: (B*kB) x d_emb
-        next_c = nn.CAddTable()({
+        prev_c = nn.CAddTable()({
             nn.CMulTable()({forget_gate, prev_c}),
             nn.CMulTable()({in_gate, in_mlp})})
-        local next_h_hat = nn.CMulTable()({
-            out_gate, nn.Tanh()(next_c)})
-        next_h = nn.CAddTable()({
-            reshaped_x, next_h_hat})
+        prev_h_hat = nn.CMulTable()({
+            out_gate, nn.Tanh()(prev_c)})
+        prev_h = nn.CAddTable()({
+            reshaped_x, prev_h_hat})
 
-        if l < opt.L then
+        --[[
+        if l <= opt.L then
             -- reshape_h: B x kB x d_emb
             -- attn_scores: (B*kB) x n_set
             -- attn_vec = (B*kB) x d_emb
@@ -109,8 +125,9 @@ function make_fce_f(opt, n_set)
             next_hid = nn.JoinTable(2)({
                 next_h, attn_vec})
         end
+        --]]
     end
-    local outputs = {nn.Reshape(opt.batch_size, opt.kB, opt.d_emb)(next_h)}
+    local outputs = {nn.Reshape(opt.batch_size, opt.kB, opt.d_emb)(prev_h)}
     return nn.gModule(inputs, outputs)
 end
 

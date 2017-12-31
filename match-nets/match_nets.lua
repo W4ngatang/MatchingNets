@@ -74,15 +74,52 @@ function MatchingNetwork:__init(opt, log_fh)
     -- Contextual embeddings: parameters after embedding
     -- in:(B x kB x n_kern) , (B x n_set x n_kern)
     -- out: (B x kB x n_kern), (B x n_set x n_kern)
+    --[[
+    if opt.contextual_embed == 'fce' then
+        log(log_fh, '\tUsing full context embeddings...')
+        local fce_f, fce_g, h_0, c_0
+        if opt.contextual_f == 1 then
+            log(log_fh, '\t\tfor f...')
+            if opt.init_fce == 'zero' then
+                h_0 = torch.zeros(opt.batch_size*opt.kB, 2*opt.d_emb)
+                c_0 = torch.zeros(opt.batch_size*opt.kB, opt.d_emb)
+            else
+                h_0 = torch.rand(2*opt.d_emb) - .5 * 2*opt.init_scale
+                c_0 = torch.rand(opt.d_emb) -.5 * 2*opt.init_scale
+            end
+            if opt.gpuid > 0 then
+                h_0 = h_0:cuda()
+                c_0 = c_0:cuda()
+            end
+            self.h_0 = h_0
+            self.c_0 = c_0
+
+            fce_f = make_fce_f(opt, n_set)
+            batch_f = fce_f({batch_f, batch_g, inputs[4], inputs[5]})
+        end
+        if opt.contextual_g == 1 then
+            log(log_fh, '\t\tfor g...')
+            fce_g = make_fce_g(opt)
+            batch_g = fce_g({batch_g})
+        end
+    elseif opt.contextual_embed == 'simple' then
+        log(log_fh, '\tUsing simple contextual embeddings...')
+        simple_fce = make_simple_fce(opt)
+        contextual_embeds = simple_fce({batch_f, batch_g})
+        batch_f = nn.SplitTable(1)(contextual_embeds)
+        batch_g = nn.SplitTable(2)(contextual_embeds)
+    end
+    --]]
+
     local fce_f, fce_g, h_0, c_0
     if opt.contextual_f == 'fce' then
         log(log_fh, '\tUsing full context embeddings for f...')
         if opt.init_fce == 'zero' then
-            h_0 = torch.zeros(opt.batch_size*opt.kB, 2*opt.d_emb)
+            h_0 = torch.zeros(opt.batch_size*opt.kB, opt.d_emb)
             c_0 = torch.zeros(opt.batch_size*opt.kB, opt.d_emb)
         else
-            h_0 = torch.rand(2*opt.d_emb) - .5 * 2*opt.init_scale
-            c_0 = torch.rand(opt.d_emb) -.5 * 2*opt.init_scale
+            h_0 = torch.rand(opt.d_emb) - .5 * 2*opt.init_scale
+            c_0 = torch.rand(opt.d_emb) - .5 * 2*opt.init_scale
         end
         if opt.gpuid > 0 then
             h_0 = h_0:cuda()
@@ -116,7 +153,7 @@ function MatchingNetwork:__init(opt, log_fh)
     --   (Transpose): B x kB x N
     --   (View): (B*kB) x N
     -- out: (B*kB) x N
-    local cos_dist = nn.MM2(false, true)({batch_g, batch_f})
+    local cos_dist = nn.MM(false, true)({batch_g, batch_f})
     local unbatch = nn.View(-1, n_set)(nn.Transpose({2,3})(cos_dist))
     local set_probs = nn.SoftMax()(unbatch)
     local class_probs = set_probs

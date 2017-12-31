@@ -163,7 +163,9 @@ function main()
 
     -- evaluate
     if opt.save_model_to ~= '' then
+        dbg()
         model = nil
+        dbg()
         collectgarbage()
         model = torch.load(opt.save_model_to)
     end
